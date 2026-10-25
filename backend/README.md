@@ -109,7 +109,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 
 前端注册页显示相同长度要求，并提供长度、确认密码的本地输入提示；后端函数负责完整规则校验，需在后续注册接口中调用。
 已安装密码哈希库 `argon2-cffi==25.1.0`，其 `PasswordHasher` 默认使用 Argon2id；依赖记录在根目录 `requirements.txt`。
-哈希生成与验证的具体实现、注册和登录 HTTP 接口尚未实现。
+哈希生成和密码验证已实现；注册和登录 HTTP 接口尚未实现。
 
 规则测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_password_policy -v`。
 
@@ -120,8 +120,28 @@ Remove-Item Env:RUN_MYSQL_TESTS
 - `hash_password(password) -> str`：生成包含算法参数和随机盐的哈希，供注册业务保存。
 - `verify_password(password, password_hash) -> bool`：验证密码，匹配返回 `True`，不匹配返回 `False`。
 - `PasswordHashError`：约定生成失败、已存哈希损坏等处理异常，与正常的密码不匹配分开；具体实现负责翻译底层库异常。
-- 接口只定义调用约定，Argon2id 实现后续放在 `infrastructure/security/password_hasher.py`。
+- 接口只定义调用约定，Argon2id 具体实现位于 `infrastructure/security/password_hasher.py`。
 - 注册流程先调用 `validate_new_password()`，再生成哈希；登录验证不重新套用新密码规则。接口不负责数据库读写或签发令牌。
+
+`Argon2PasswordHasher` 已实现并继承 `PasswordHasher` 接口，提供 `hash_password()` 和 `verify_password()`。
+生成时明确使用 Argon2id，采用库默认成本参数和自动随机盐，保留原始密码；失败转换为 `PasswordHashError`。
+验证时由库读取已存哈希中的盐和参数；密码不匹配返回 `False`，哈希无效或验证过程失败抛出 `PasswordHashError`。
+两个方法均不重复执行新密码规则、不写入数据库，也未接入前端；登录验证不改变密码的大小写或空格。
+
+当前可单独调用生成哈希和验证密码：
+
+```python
+from backend.app.domain.password import validate_new_password
+from backend.app.infrastructure.security.password_hasher import Argon2PasswordHasher
+
+validate_new_password(password)
+hasher = Argon2PasswordHasher()
+password_hash = hasher.hash_password(password)
+matches = hasher.verify_password(password, password_hash)
+```
+
+示例中的 `password` 由调用方提供；不要将密码或生成的哈希写入日志。
+生成与验证测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_password_hashing -v`。
 
 ## 数据库迁移
 
