@@ -5,12 +5,20 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 
-from backend.app.api.exception_handlers import unhandled_exception_handler
+from backend.app.api.auth import router as auth_router
+from backend.app.api.exception_handlers import (
+    request_validation_exception_handler,
+    unhandled_exception_handler,
+)
 from backend.app.api.health import router as health_router
 from backend.app.api.middleware.request_logging import RequestLoggingMiddleware
 from backend.app.core.config import get_settings
 from backend.app.core.logging import setup_logging
+from backend.app.infrastructure.db.connection import create_database_engine
+from backend.app.infrastructure.db.session import create_session_factory
+from backend.app.infrastructure.security.password_hasher import Argon2PasswordHasher
 
 settings = get_settings()
 setup_logging(settings.log_level)
@@ -19,10 +27,15 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-    logger.info("应用启动，环境=%s，版本=%s", settings.app_env, settings.app_version)
+    engine = create_database_engine(settings)
     try:
+        application.state.database_engine = engine
+        application.state.session_factory = create_session_factory(engine)
+        application.state.password_hasher = Argon2PasswordHasher()
+        logger.info("应用启动，环境=%s，版本=%s", settings.app_env, settings.app_version)
         yield
     finally:
+        engine.dispose()
         logger.info("应用停止")
 
 
@@ -35,4 +48,6 @@ app = FastAPI(
 
 app.add_middleware(RequestLoggingMiddleware)
 app.add_exception_handler(Exception, unhandled_exception_handler)
+app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
 app.include_router(health_router)
+app.include_router(auth_router)

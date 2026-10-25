@@ -1,6 +1,6 @@
 # 后端基础骨架
 
-当前已实现 FastAPI 应用入口、健康检查、统一配置和请求日志。数据库连接、会话工具已独立实现，尚未接入请求生命周期。
+当前已实现 FastAPI 应用入口、健康检查、统一配置、请求日志和用户注册接口。数据库连接池、会话和密码哈希能力已接入应用生命周期，注册请求使用独立事务。
 
 ## 启动
 
@@ -56,7 +56,8 @@ MySQL 配置负责读取与校验，数据库引擎和会话工具通过传入�
 - `infrastructure/db/session.py` 的 `create_session_factory(engine)` 创建绑定到已有引擎的会话工厂，后续每次调用工厂会得到独立的 Session。
 - `session_scope(factory)` 支持 `with` 语法，异常时回滚并继续抛出异常，结束时始终关闭会话、释放其占用资源。
 - `session_scope` 不自动提交。业务层显式调用 `session.commit()`，或组织自己的事务边界；未提交事务在关闭会话时回滚。
-- 每个请求或任务独立使用 Session；一个进程内复用引擎和会话工厂。应用组装与启动关闭接入将在后续实现。
+- 每个注册请求独立使用 Session；一个进程内复用引擎、会话工厂和密码哈希工具。应用启动时创建这些资源，关闭时释放连接池；真实数据库连接仍按需建立。
+- `infrastructure/db/unit_of_work.py` 使用同一会话组装用户仓储和提交操作，实现 `application/ports/unit_of_work.py` 的事务接口，应用业务不依赖 SQLAlchemy。
 
 ## 用户数据与数据库模型
 
@@ -84,7 +85,7 @@ ORM 中的时间使用 UTC，MySQL 以不带时区的 `DATETIME(6)` 保存。
 - `add()` 只接收 ID 为空的新用户；密码哈希需预先生成。调用 `flush()` 后返回带 ID 和时间的新对象，不修改原来的只读对象。
 - 用户名唯一约束冲突转换为 `UsernameAlreadyExistsError`，其他数据库异常继续抛出。数据库约束负责阻止并发重复写入，注册前的查询不能代替此约束。
 - 数据访问层不提交、回滚或关闭会话。调用方组织事务，成功后显式 `commit()`，异常由现有 `session_scope()` 回滚并释放连接。
-- 本阶段只实现数据访问，没有接入注册、登录 HTTP 接口和前端。
+- 用户数据访问已接入注册 HTTP 接口；登录接口和前端提交尚未接入。
 
 真实 MySQL 集成测试需先应用迁移，再在项目根目录显式开启：
 
@@ -109,7 +110,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 
 前端注册页显示相同长度要求，并提供长度、确认密码的本地输入提示；后端函数负责完整规则校验，需在后续注册接口中调用。
 已安装密码哈希库 `argon2-cffi==25.1.0`，其 `PasswordHasher` 默认使用 Argon2id；依赖记录在根目录 `requirements.txt`。
-哈希生成和密码验证已实现；注册和登录 HTTP 接口尚未实现。
+哈希生成、密码验证和注册 HTTP 接口已实现；登录 HTTP 接口尚未实现。
 
 规则测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_password_policy -v`。
 
@@ -126,7 +127,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 `Argon2PasswordHasher` 已实现并继承 `PasswordHasher` 接口，提供 `hash_password()` 和 `verify_password()`。
 生成时明确使用 Argon2id，采用库默认成本参数和自动随机盐，保留原始密码；失败转换为 `PasswordHashError`。
 验证时由库读取已存哈希中的盐和参数；密码不匹配返回 `False`，哈希无效或验证过程失败抛出 `PasswordHashError`。
-两个方法均不重复执行新密码规则、不写入数据库，也未接入前端；登录验证不改变密码的大小写或空格。
+两个方法均不重复执行新密码规则、不直接写入数据库；注册业务已调用生成方法，前端提交尚未接入。登录验证不改变密码的大小写或空格。
 
 当前可单独调用生成哈希和验证密码：
 
@@ -142,6 +143,41 @@ matches = hasher.verify_password(password, password_hash)
 
 示例中的 `password` 由调用方提供；不要将密码或生成的哈希写入日志。
 生成与验证测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_password_hashing -v`。
+
+## 注册接口
+
+`POST /api/auth/register` 接收 JSON：
+
+```json
+{
+  "username": "student_01",
+  "password": "LearnPython2026!",
+  "password_confirmation": "LearnPython2026!"
+}
+```
+
+启动后端后，可在 [接口文档](http://127.0.0.1:8000/docs) 展开注册接口，点击 Try it out、填写请求并 Execute。成功注册会在本机 MySQL 中保存真实用户。
+
+- `api/schemas/auth.py` 定义请求、响应模型。密码使用 `SecretStr`，不清理空格；拒绝请求中的角色、启用状态等额外字段。
+- `api/auth.py` 负责 HTTP 收发及状态码转换；`api/dependencies.py` 为每个请求提供事务及业务依赖。
+- `application/register_user.py` 组织规则校验、账号规范化、重复检查、生成哈希、新增用户、提交事务，默认角色 `user`、启用状态 `true`。
+- 数据库唯一约束负责阻止并发重复账号。异常时，原有 `session_scope()` 回滚并关闭会话，避免未完成的注册留下记录。
+- `201`：注册成功，返回 `id`、`username`、`role`、`is_active`、`created_at`、`updated_at`，时间包含 UTC 标记。
+- `409`：账号已存在。`422`：字段或密码规则不符合要求。`500`：未预期的内部处理失败，响应不暴露数据库或哈希异常细节。
+- 请求校验错误统一只返回错误位置、描述和类型，移除默认错误详情中的原始输入，避免回显明文密码。
+- 注册成功不会自动登录或签发令牌。前端注册按钮仍为原型，尚未发送请求。
+
+接口规则测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_registration -v`。
+
+真实 MySQL 注册检查（会真正提交临时账号，完成后只删除本次创建的唯一测试账号）：
+
+```powershell
+$env:RUN_MYSQL_TESTS = "1"
+.\.venv\Scripts\python.exe -m unittest backend.tests.test_registration_mysql -v
+Remove-Item Env:RUN_MYSQL_TESTS
+```
+
+覆盖请求到数据库的实际提交、并发唯一性、提交失败时回滚及连接释放，不会清空用户表。自增 ID 计数可能前进。
 
 ## 数据库迁移
 

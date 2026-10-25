@@ -10,6 +10,7 @@
 ```
 
 - 接口文档：[http://127.0.0.1:8000/docs](http://127.0.0.1:8000/docs)
+- 已提供 `POST /api/auth/register` 注册接口，可通过接口文档填写账号、密码和确认密码测试；成功后会真实写入 MySQL。
 - 健康检查：[http://127.0.0.1:8000/api/health](http://127.0.0.1:8000/api/health)
 - 首次运行的依赖安装和 `.env` 配置见 [后端说明](backend/README.md)。
 
