@@ -28,6 +28,7 @@
 | `APP_ENV` | development | 标识运行环境，可选 development、test、production |
 | `DEBUG` | false | FastAPI 调试模式 |
 | `LOG_LEVEL` | INFO | 终端日志级别，可选 DEBUG、INFO、WARNING、ERROR、CRITICAL |
+| `CORS_ALLOWED_ORIGINS` | 本地 `127.0.0.1:8765`、`localhost:8765` | 允许浏览器访问的前端来源，环境变量使用 JSON 数组，修改后重启后端 |
 | `MYSQL_HOST` | 127.0.0.1 | MySQL 服务器地址，不能为空 |
 | `MYSQL_PORT` | 3306 | MySQL 端口，整数且范围为 1～65535 |
 | `MYSQL_DATABASE` | data_processing_platform | 项目数据库名，不能为空 |
@@ -85,7 +86,7 @@ ORM 中的时间使用 UTC，MySQL 以不带时区的 `DATETIME(6)` 保存。
 - `add()` 只接收 ID 为空的新用户；密码哈希需预先生成。调用 `flush()` 后返回带 ID 和时间的新对象，不修改原来的只读对象。
 - 用户名唯一约束冲突转换为 `UsernameAlreadyExistsError`，其他数据库异常继续抛出。数据库约束负责阻止并发重复写入，注册前的查询不能代替此约束。
 - 数据访问层不提交、回滚或关闭会话。调用方组织事务，成功后显式 `commit()`，异常由现有 `session_scope()` 回滚并释放连接。
-- 用户数据访问已接入注册 HTTP 接口；登录接口和前端提交尚未接入。
+- 用户数据访问已接入注册 HTTP 接口和前端注册按钮；登录接口尚未接入。
 
 真实 MySQL 集成测试需先应用迁移，再在项目根目录显式开启：
 
@@ -108,7 +109,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 - 校验成功返回 `None`，失败抛出不包含密码原文的 `ValueError`。
 - 明文密码规则与 `User.password_hash` 的哈希字段规则分开；登录不重新套用新密码规则。
 
-前端注册页显示相同长度要求，并提供长度、确认密码的本地输入提示；后端函数负责完整规则校验，需在后续注册接口中调用。
+前端注册页显示相同长度要求，并提供长度、确认密码的本地输入提示；后端函数在注册业务中执行完整规则校验。
 已安装密码哈希库 `argon2-cffi==25.1.0`，其 `PasswordHasher` 默认使用 Argon2id；依赖记录在根目录 `requirements.txt`。
 哈希生成、密码验证和注册 HTTP 接口已实现；登录 HTTP 接口尚未实现。
 
@@ -127,7 +128,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 `Argon2PasswordHasher` 已实现并继承 `PasswordHasher` 接口，提供 `hash_password()` 和 `verify_password()`。
 生成时明确使用 Argon2id，采用库默认成本参数和自动随机盐，保留原始密码；失败转换为 `PasswordHashError`。
 验证时由库读取已存哈希中的盐和参数；密码不匹配返回 `False`，哈希无效或验证过程失败抛出 `PasswordHashError`。
-两个方法均不重复执行新密码规则、不直接写入数据库；注册业务已调用生成方法，前端提交尚未接入。登录验证不改变密码的大小写或空格。
+两个方法均不重复执行新密码规则、不直接写入数据库；注册业务已调用生成方法并接入前端提交。登录验证不改变密码的大小写或空格。
 
 当前可单独调用生成哈希和验证密码：
 
@@ -165,7 +166,8 @@ matches = hasher.verify_password(password, password_hash)
 - `201`：注册成功，返回 `id`、`username`、`role`、`is_active`、`created_at`、`updated_at`，时间包含 UTC 标记。
 - `409`：账号已存在。`422`：字段或密码规则不符合要求。`500`：未预期的内部处理失败，响应不暴露数据库或哈希异常细节。
 - 请求校验错误统一只返回错误位置、描述和类型，移除默认错误详情中的原始输入，避免回显明文密码。
-- 注册成功不会自动登录或签发令牌。前端注册按钮仍为原型，尚未发送请求。
+- 注册成功不会自动登录或签发令牌。前端注册按钮已接入，成功后切回登录表单；登录提交仍未开放。
+- `api/middleware/cors.py` 使用配置中的来源名单，允许注册所需的 `POST` 和 `Content-Type` 跨域请求，不启用 Cookie 凭据。默认支持两个本地 `8765` 来源，其他来源预检被拒绝。
 
 接口规则测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_registration -v`。
 

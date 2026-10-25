@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     app_env: Literal["development", "test", "production"] = "development"
     debug: bool = False
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    cors_allowed_origins: list[str] = Field(default_factory=lambda: [
+        "http://127.0.0.1:8765",
+        "http://localhost:8765",
+    ])
 
     mysql_host: str = Field(default="127.0.0.1", min_length=1)
     mysql_port: int = Field(default=3306, ge=1, le=65535)

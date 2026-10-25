@@ -13,6 +13,7 @@ from backend.app.api.exception_handlers import (
     unhandled_exception_handler,
 )
 from backend.app.api.health import router as health_router
+from backend.app.api.middleware.cors import configure_cors
 from backend.app.api.middleware.request_logging import RequestLoggingMiddleware
 from backend.app.core.config import get_settings
 from backend.app.core.logging import setup_logging
@@ -46,6 +47,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+configure_cors(app, settings)
 app.add_middleware(RequestLoggingMiddleware)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 app.add_exception_handler(RequestValidationError, request_validation_exception_handler)

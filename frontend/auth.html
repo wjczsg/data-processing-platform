@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f6f7f8">
+  <meta name="api-base-url" content="http://127.0.0.1:8000">
   <title>登录 · 行序</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23273732'/%3E%3Cpath d='M8 10h16M8 16h10M8 22h16' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
@@ -26,15 +27,16 @@
 
       <div id="auth-panel" role="tabpanel" aria-labelledby="login-tab">
         <form id="auth-form" class="auth-form" novalidate>
-          <div class="auth-field"><label for="account">账号</label><input id="account" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="请输入账号"></div>
+          <div class="auth-field"><label for="account">账号</label><input id="account" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="请输入账号" aria-describedby="account-feedback"><p id="account-feedback" class="auth-field-error" aria-live="polite" hidden></p></div>
           <div class="auth-field"><label for="password">密码</label><div class="password-input"><input id="password" name="password" type="password" autocomplete="current-password" placeholder="请输入密码" aria-describedby="password-hint password-feedback"><button class="password-toggle" type="button" data-password="password" aria-label="显示密码" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/><path class="eye-slash" d="m4 4 16 16"/></svg></button></div><p id="password-hint" class="auth-field-hint" hidden>8～128 个字符，可使用中文、字母、数字、符号和空格；避免常见弱密码。</p><p id="password-feedback" class="auth-field-error" aria-live="polite" hidden></p></div>
           <div class="auth-field" id="confirm-field" hidden><label for="confirm-password">确认密码</label><div class="password-input"><input id="confirm-password" name="password_confirmation" type="password" autocomplete="new-password" placeholder="请再次输入密码" aria-describedby="confirmation-feedback" disabled><button class="password-toggle" type="button" data-password="confirm-password" aria-label="显示确认密码" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/><path class="eye-slash" d="m4 4 16 16"/></svg></button></div><p id="confirmation-feedback" class="auth-field-error" aria-live="polite" hidden></p></div>
-          <button id="auth-submit" class="auth-submit" type="submit" disabled>登录 · 待接入后端</button>
+          <button id="auth-submit" class="auth-submit" type="submit" disabled>登录 · 暂未开放</button>
+          <p id="auth-feedback" class="auth-feedback" role="status" aria-live="polite" hidden></p>
         </form>
         <p class="auth-switch-prompt"><span id="switch-description">还没有账号？</span><button id="switch-mode" type="button">注册账号</button></p>
       </div>
 
-      <div class="auth-prototype-note"><span class="small-dot"></span><span>页面原型，登录与注册功能待接入。</span></div>
+      <div class="auth-prototype-note"><span class="small-dot"></span><span>支持账号注册，登录功能暂未开放。</span></div>
     </section>
   </main>
 
