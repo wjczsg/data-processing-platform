@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     app_version: str = Field(default="0.1.0", min_length=1)
     app_env: Literal["development", "test", "production"] = "development"
     debug: bool = False
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
 
 @lru_cache(maxsize=1)
