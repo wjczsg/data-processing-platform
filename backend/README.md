@@ -74,7 +74,51 @@ ORM 中的时间使用 UTC，MySQL 以不带时区的 `DATETIME(6)` 保存。
 时间默认值及 `updated_at` 更新函数由 SQLAlchemy 写入时执行，直接使用 SQL 写入时需要显式提供或维护时间。
 业务层 `User` 是只读数据结构，尚未保存时 ID 和时间为空，密码哈希不包含在默认 repr 中；不能直接把包含哈希的对象作为接口响应。
 
-本阶段只声明模型，没有执行 `create_all` 或建表 SQL。账号唯一性等数据库约束需在下一阶段执行迁移后才会实际生效。
+本地数据库 `data_processing_platform` 已应用首个迁移 `0001`，`users` 表已创建，账号唯一性等数据库约束已生效。
+
+## 用户数据访问
+
+- `application/ports/user_repository.py` 使用 `Protocol` 定义 `UserRepository`，约定 `get_by_id()`、`get_by_username()` 和 `add()`，不依赖 SQLAlchemy。
+- `infrastructure/repositories/user_repository.py` 中的 `MySQLUserRepository` 接收外部 Session，执行 SQLAlchemy 查询和写入，并返回业务层 `User`。
+- 查询不到用户返回 `None`。按用户名查询会先清理空格、统一小写，格式非法抛出 `ValueError`。
+- `add()` 只接收 ID 为空的新用户；密码哈希需预先生成。调用 `flush()` 后返回带 ID 和时间的新对象，不修改原来的只读对象。
+- 用户名唯一约束冲突转换为 `UsernameAlreadyExistsError`，其他数据库异常继续抛出。数据库约束负责阻止并发重复写入，注册前的查询不能代替此约束。
+- 数据访问层不提交、回滚或关闭会话。调用方组织事务，成功后显式 `commit()`，异常由现有 `session_scope()` 回滚并释放连接。
+- 本阶段只实现数据访问，没有接入注册、登录 HTTP 接口和前端。
+
+真实 MySQL 集成测试需先应用迁移，再在项目根目录显式开启：
+
+```powershell
+$env:RUN_MYSQL_TESTS = "1"
+.\.venv\Scripts\python.exe -m unittest backend.tests.test_user_repository_mysql -v
+Remove-Item Env:RUN_MYSQL_TESTS
+```
+
+测试检查新增、查询、用户名规范化、冲突处理及事务隔离，测试数据全部回滚，不留下用户记录；MySQL 自增 ID 计数可能前进，这是正常行为。
+
+## 数据库迁移
+
+- 根目录 `alembic.ini` 指向 `backend/migrations`，不包含数据库密码或连接 URL。
+- `backend/migrations/env.py` 在线时读取项目配置并复用数据库引擎，通过 `Base.metadata` 发现模型。
+- 首个版本 `0001_create_users_table.py` 的 `upgrade()` 创建用户表，`downgrade()` 删除该表及其数据。
+- 生成迁移时不自动创建版本跟踪表；真正执行升级时才创建并更新 `alembic_version`。
+
+在项目根目录查看已有版本：
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic history
+```
+
+离线预览 SQL（只输出文本，不连接或修改数据库）：
+
+```powershell
+.\.venv\Scripts\python.exe -m alembic upgrade head --sql
+```
+
+应用迁移可执行 `.\.venv\Scripts\python.exe -m alembic upgrade head`。本地已执行 `upgrade 0001`，并通过 `alembic check` 确认数据库结构与当前模型一致。
+首次应用会创建 `users` 和 `alembic_version`，不会自动插入用户。
+MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前需检查是否删除表或字段。
+自动生成的脚本必须审查，字段改名、数据转换和已有 CHECK 约束变更尤其需要手动核对。
 
 ## 日志
 

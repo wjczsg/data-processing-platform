@@ -1,0 +1,8 @@
+本目录保存数据库迁移环境和结构变更历史。
+
+env.py：复用项目配置、连接和 ORM 元数据。在线模式可生成或执行迁移；离线模式只输出 SQL。
+script.py.mako：新迁移脚本模板。
+versions/：已生成、需要审查并提交 Git 的版本脚本。
+
+当前首个版本为 0001，已应用到本地 data_processing_platform 数据库，创建了 users 表和 alembic_version 版本跟踪表。
+命令、配置及默认值说明见 backend/README.md。
