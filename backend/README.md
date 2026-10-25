@@ -58,6 +58,24 @@ MySQL 配置负责读取与校验，数据库引擎和会话工具通过传入�
 - `session_scope` 不自动提交。业务层显式调用 `session.commit()`，或组织自己的事务边界；未提交事务在关闭会话时回滚。
 - 每个请求或任务独立使用 Session；一个进程内复用引擎和会话工厂。应用组装与启动关闭接入将在后续实现。
 
+## 用户数据与数据库模型
+
+- `domain/user.py` 定义业务用户数据 `User`、角色 `UserRole` 和账号规范，不依赖 SQLAlchemy。
+- `infrastructure/db/models/base.py` 定义统一 ORM 基类和约束命名规则。
+- `infrastructure/db/models/user.py` 定义 `UserModel`，描述 MySQL `users` 表。
+- `models/__init__.py` 集中导入模型，便于 Alembic 在下一阶段读取元数据。
+
+用户表包含 `id`、`username`、`password_hash`、`role`、`is_active`、`created_at`、`updated_at`。
+账号清理首尾空格、统一小写，限制为 3～32 位 ASCII 字母、数字或下划线。
+定义账号唯一约束及字段检查约束；角色只允许 `user` 和 `admin`，默认普通用户，启用状态默认 true。
+密码字段保存哈希，本阶段只检查非空和长度，哈希算法及密码验证在认证模块中实现。
+
+ORM 中的时间使用 UTC，MySQL 以不带时区的 `DATETIME(6)` 保存。
+时间默认值及 `updated_at` 更新函数由 SQLAlchemy 写入时执行，直接使用 SQL 写入时需要显式提供或维护时间。
+业务层 `User` 是只读数据结构，尚未保存时 ID 和时间为空，密码哈希不包含在默认 repr 中；不能直接把包含哈希的对象作为接口响应。
+
+本阶段只声明模型，没有执行 `create_all` 或建表 SQL。账号唯一性等数据库约束需在下一阶段执行迁移后才会实际生效。
+
 ## 日志
 
 日志输出到终端，时间包含服务器本地时区。每个模块使用 `logging.getLogger(__name__)`，统一使用公共格式。
