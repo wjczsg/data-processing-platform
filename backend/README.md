@@ -1,10 +1,12 @@
 # 后端基础骨架
 
-当前已实现 FastAPI 应用入口、健康检查、统一配置和请求日志。
+当前已实现 FastAPI 应用入口、健康检查、统一配置和请求日志。数据库连接、会话工具已独立实现，尚未接入请求生命周期。
 
 ## 启动
 
 在项目根目录执行：
+
+首次配置时，将 `.env.example` 复制为 `.env`，填写本机 MySQL 账号和密码；已有 `.env` 时直接修改，保留现有配置。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
@@ -26,6 +28,11 @@
 | `APP_ENV` | development | 标识运行环境，可选 development、test、production |
 | `DEBUG` | false | FastAPI 调试模式 |
 | `LOG_LEVEL` | INFO | 终端日志级别，可选 DEBUG、INFO、WARNING、ERROR、CRITICAL |
+| `MYSQL_HOST` | 127.0.0.1 | MySQL 服务器地址，不能为空 |
+| `MYSQL_PORT` | 3306 | MySQL 端口，整数且范围为 1～65535 |
+| `MYSQL_DATABASE` | data_processing_platform | 项目数据库名，不能为空 |
+| `MYSQL_USER` | 必填 | MySQL 连接账号，不能为空 |
+| `MYSQL_PASSWORD` | 必填 | MySQL 连接密码，以 SecretStr 保存，不能为空 |
 
 正常启动时，读取优先级为：环境变量 > `.env` > 代码默认值。
 
@@ -36,7 +43,20 @@
 
 `get_settings()` 在每个进程内缓存配置。修改 `.env` 或环境变量后，需要重启后端；不要依赖 `--reload` 自动监测 `.env`。
 
-`.env` 已加入 Git 忽略规则，可提交 `.env.example` 供其他开发者参考。后续 MySQL 和 JWT 的配置将随对应模块加入。
+`.env` 已加入 Git 忽略规则，可提交 `.env.example` 供其他开发者参考。模板中的账号和密码留空；JWT 配置将在认证模块加入。
+
+MySQL 配置负责读取与校验，数据库引擎和会话工具通过传入的配置或引擎创建，不在导入时自动连接数据库。
+普通配置表示和 JSON 序列化会遮蔽密码；密码原始字符（包括前导零和前后空格）保持不变。
+连接模块通过 `mysql_password.get_secret_value()` 取得密码，不应将此值写入日志。
+配置校验错误的文本隐藏原始输入，不要自行记录包含完整输入的校验详情。
+
+## 数据库连接与会话
+
+- `infrastructure/db/connection.py` 的 `create_database_engine(settings)` 创建引擎和连接池，连接按需建立。
+- `infrastructure/db/session.py` 的 `create_session_factory(engine)` 创建绑定到已有引擎的会话工厂，后续每次调用工厂会得到独立的 Session。
+- `session_scope(factory)` 支持 `with` 语法，异常时回滚并继续抛出异常，结束时始终关闭会话、释放其占用资源。
+- `session_scope` 不自动提交。业务层显式调用 `session.commit()`，或组织自己的事务边界；未提交事务在关闭会话时回滚。
+- 每个请求或任务独立使用 Session；一个进程内复用引擎和会话工厂。应用组装与启动关闭接入将在后续实现。
 
 ## 日志
 
