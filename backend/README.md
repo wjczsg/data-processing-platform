@@ -96,6 +96,22 @@ Remove-Item Env:RUN_MYSQL_TESTS
 
 测试检查新增、查询、用户名规范化、冲突处理及事务隔离，测试数据全部回滚，不留下用户记录；MySQL 自增 ID 计数可能前进，这是正常行为。
 
+## 新密码规则
+
+`domain/password.py` 提供独立于数据库和哈希算法的规则函数：
+
+- `validate_new_password(password)` 用于注册、修改密码：8～128 个 Unicode 码点，支持中文、符号和普通空格，不强制字符组合。
+- 拒绝全空白、控制字符、换行分隔符、无效 Unicode 代理码点及本地名单中的常见弱密码。当前名单为基础名单，不等同于完整泄露密码库。
+- 不清理密码首尾空格、不改变大小写；仅在弱密码名单匹配时忽略大小写。
+- `validate_password_confirmation(password, confirmation)` 独立检查两次输入完全一致。
+- 校验成功返回 `None`，失败抛出不包含密码原文的 `ValueError`。
+- 明文密码规则与 `User.password_hash` 的哈希字段规则分开；登录不重新套用新密码规则。
+
+前端注册页显示相同长度要求，并提供长度、确认密码的本地输入提示；后端函数负责完整规则校验，需在后续注册接口中调用。
+密码哈希库、哈希生成与验证、注册和登录 HTTP 接口尚未实现。
+
+规则测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_password_policy -v`。
+
 ## 数据库迁移
 
 - 根目录 `alembic.ini` 指向 `backend/migrations`，不包含数据库密码或连接 URL。
