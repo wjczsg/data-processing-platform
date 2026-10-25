@@ -108,9 +108,20 @@ Remove-Item Env:RUN_MYSQL_TESTS
 - 明文密码规则与 `User.password_hash` 的哈希字段规则分开；登录不重新套用新密码规则。
 
 前端注册页显示相同长度要求，并提供长度、确认密码的本地输入提示；后端函数负责完整规则校验，需在后续注册接口中调用。
-密码哈希库、哈希生成与验证、注册和登录 HTTP 接口尚未实现。
+已安装密码哈希库 `argon2-cffi==25.1.0`，其 `PasswordHasher` 默认使用 Argon2id；依赖记录在根目录 `requirements.txt`。
+哈希生成与验证的具体实现、注册和登录 HTTP 接口尚未实现。
 
 规则测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_password_policy -v`。
+
+## 密码处理接口
+
+`application/ports/password_hasher.py` 使用 `Protocol` 定义 `PasswordHasher`，不依赖 `argon2-cffi` 或数据库：
+
+- `hash_password(password) -> str`：生成包含算法参数和随机盐的哈希，供注册业务保存。
+- `verify_password(password, password_hash) -> bool`：验证密码，匹配返回 `True`，不匹配返回 `False`。
+- `PasswordHashError`：约定生成失败、已存哈希损坏等处理异常，与正常的密码不匹配分开；具体实现负责翻译底层库异常。
+- 接口只定义调用约定，Argon2id 实现后续放在 `infrastructure/security/password_hasher.py`。
+- 注册流程先调用 `validate_new_password()`，再生成哈希；登录验证不重新套用新密码规则。接口不负责数据库读写或签发令牌。
 
 ## 数据库迁移
 
