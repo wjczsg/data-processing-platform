@@ -10,6 +10,7 @@ from backend.app.api.dependencies import get_authentication_service
 from backend.app.api.exception_handlers import request_validation_exception_handler
 from backend.app.api.files import router
 from backend.app.application.ports.token_service import InvalidAccessTokenError
+from backend.app.core.config import Settings, get_settings
 from backend.app.domain.user import User
 from backend.tests.asgi_client import request_json
 
@@ -23,6 +24,9 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         self.app.include_router(router)
         self.app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
         self.app.dependency_overrides[get_authentication_service] = lambda: self.service
+        self.settings = Settings(_env_file=None, mysql_user="test_user", mysql_password="test-only-password",
+                                 upload_max_bytes=50 * 1024 * 1024)
+        self.app.dependency_overrides[get_settings] = lambda: self.settings
 
     async def upload(self, files, token="test-access", owner_id=None, *, file_content_type="text/csv"):
         boundary = "test-upload-boundary"
@@ -61,6 +65,27 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_file_is_rejected(self):
         self.assertEqual((await self.upload([]))[0], 422)
+
+    async def test_configured_file_size_limit_allows_boundary_and_rejects_one_extra_byte(self):
+        self.settings = self.settings.model_copy(update={"upload_max_bytes": 8})
+        for size, expected_status in ((7, 200), (8, 200), (9, 413)):
+            with self.subTest(size=size):
+                status, body = await self.upload([("file", "orders.csv", b"x" * size)])
+                self.assertEqual(status, expected_status)
+                if status == 200:
+                    self.assertEqual(body["size_bytes"], size)
+                else:
+                    self.assertEqual(body, {"detail": "文件大小不能超过 8 字节"})
+
+    async def test_size_limit_counts_all_read_chunks(self):
+        limit = 1024 * 1024 + 1
+        self.settings = self.settings.model_copy(update={"upload_max_bytes": limit})
+        status, body = await self.upload([("file", "orders.csv", b"x" * (limit + 1))])
+        self.assertEqual((status, body), (413, {"detail": f"文件大小不能超过 {limit} 字节"}))
+
+    async def test_empty_file_is_not_rejected_by_size_upper_limit(self):
+        status, body = await self.upload([("file", "orders.csv", b"")])
+        self.assertEqual((status, body["size_bytes"]), (200, 0))
 
     async def test_csv_extension_is_case_insensitive(self):
         for filename in ("orders.csv", "orders.CSV", "orders.CsV"):

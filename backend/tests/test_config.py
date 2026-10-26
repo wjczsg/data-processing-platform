@@ -35,6 +35,14 @@ class MySQLConfigTests(unittest.TestCase):
         self.assertEqual(settings.mysql_port, 3307)
         self.assertIsInstance(settings.mysql_port, int)
 
+    def test_upload_limit_defaults_to_50_mib_and_requires_a_positive_integer(self):
+        self.assertEqual(self.settings().upload_max_bytes, 52428800)
+        os.environ["UPLOAD_MAX_BYTES"] = "8"
+        self.assertEqual(self.settings().upload_max_bytes, 8)
+        for invalid in (0, -1, "abc"):
+            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
+                self.settings(upload_max_bytes=invalid)
+
     def test_port_and_empty_text_are_rejected(self):
         for port in (0, 65536, "abc"):
             with self.subTest(port=port), self.assertRaises(ValidationError):
