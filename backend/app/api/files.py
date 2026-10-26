@@ -8,7 +8,13 @@ from starlette.datastructures import UploadFile as FormUploadFile
 from backend.app.api.dependencies import get_current_user
 from backend.app.api.schemas.files import FileReceiveResponse
 from backend.app.core.config import Settings, get_settings
-from backend.app.domain.file_rules import FileTooLargeError, validate_csv_filename, validate_file_size
+from backend.app.domain.file_rules import (
+    EmptyFileError,
+    FileTooLargeError,
+    validate_csv_filename,
+    validate_file_size,
+    validate_non_empty_file,
+)
 from backend.app.domain.user import User
 
 router = APIRouter(prefix="/api/files", tags=["文件"])
@@ -18,7 +24,7 @@ router = APIRouter(prefix="/api/files", tags=["文件"])
     "",
     response_model=FileReceiveResponse,
     summary="临时接收单个文件",
-    description="验证登录，仅接收 .csv 文件（扩展名不区分大小写）。CSV 内容解析、正式存储、数据库记录和后台任务尚未接入。",
+    description="验证登录，仅接收非零字节的 .csv 文件（扩展名不区分大小写）。CSV 内容解析、正式存储、数据库记录和后台任务尚未接入。",
     responses={413: {"description": "文件内容大小超过 UPLOAD_MAX_BYTES 配置上限，默认 50 MiB"}},
 )
 async def receive_file(
@@ -46,8 +52,11 @@ async def receive_file(
         while chunk := await file.read(1024 * 1024):
             size_bytes += len(chunk)
             validate_file_size(size_bytes, settings.upload_max_bytes)
+        validate_non_empty_file(size_bytes)
     except FileTooLargeError as error:
         raise HTTPException(status_code=413, detail=str(error)) from error
+    except EmptyFileError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
 
     # 临时文件由 FastAPI 在请求结束时关闭；正式存储后续通过存储接口接入。
     return FileReceiveResponse(

@@ -83,9 +83,16 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         status, body = await self.upload([("file", "orders.csv", b"x" * (limit + 1))])
         self.assertEqual((status, body), (413, {"detail": f"文件大小不能超过 {limit} 字节"}))
 
-    async def test_empty_file_is_not_rejected_by_size_upper_limit(self):
+    async def test_zero_byte_file_is_rejected(self):
         status, body = await self.upload([("file", "orders.csv", b"")])
-        self.assertEqual((status, body["size_bytes"]), (200, 0))
+        self.assertEqual((status, body), (422, {"detail": "不能上传空文件"}))
+
+    async def test_nonzero_content_is_not_treated_as_zero_byte_file(self):
+        for content in (b"x", b" ", b"\n", b"\xef\xbb\xbf", b"order_id,product,amount,order_date\n"):
+            with self.subTest(content=content):
+                status, body = await self.upload([("file", "orders.csv", content)])
+                self.assertEqual(status, 200)
+                self.assertEqual(body["size_bytes"], len(content))
 
     async def test_csv_extension_is_case_insensitive(self):
         for filename in ("orders.csv", "orders.CSV", "orders.CsV"):

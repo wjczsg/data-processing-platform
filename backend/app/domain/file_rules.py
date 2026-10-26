@@ -7,6 +7,10 @@ class FileTooLargeError(ValueError):
     """实际文件内容大小超过允许的上限。"""
 
 
+class EmptyFileError(ValueError):
+    """实际文件内容为零字节。"""
+
+
 def validate_csv_filename(filename: str | None) -> None:
     """只允许 .csv 扩展名，忽略大小写；文件内容合法性由后续解析确认。"""
     if not filename or PurePath(filename).suffix.lower() != ".csv":
@@ -21,3 +25,9 @@ def validate_file_size(size_bytes: int, max_bytes: int) -> None:
         else:
             limit = f"{max_bytes} 字节"
         raise FileTooLargeError(f"文件大小不能超过 {limit}")
+
+
+def validate_non_empty_file(size_bytes: int) -> None:
+    """读取结束后拒绝零字节文件；有字节不代表存在有效 CSV 数据。"""
+    if size_bytes == 0:
+        raise EmptyFileError("不能上传空文件")
