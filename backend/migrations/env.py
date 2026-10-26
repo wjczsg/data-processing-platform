@@ -9,7 +9,7 @@ from backend.app.core.logging import setup_logging
 from backend.app.infrastructure.db.connection import create_database_engine
 from backend.app.infrastructure.db.models import Base
 
-# models 包已导入所有已声明模型，元数据包含 users 表。
+# models 包已导入所有已声明模型，元数据包含用户和登录会话相关表。
 target_metadata = Base.metadata
 
 

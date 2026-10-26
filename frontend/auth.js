@@ -142,6 +142,7 @@
     const timeout = window.setTimeout(() => controller.abort(), 15000);
     let registeredUsername = null;
     let loggedIn = false;
+    const requestedAt = Date.now();
     setSubmitting(true);
     try {
       const response = await fetch(`${API_BASE_URL}/api/auth/${register ? "register" : "login"}`, {
@@ -163,7 +164,7 @@
           || !Number.isInteger(data.user?.id) || typeof data.user?.username !== "string") {
           throw new Error("登录结果暂时无法确认，请稍后重试。");
         }
-        window.AuthSession.setToken(data.access_token);
+        window.AuthSession.setSession(data, requestedAt);
         loggedIn = true;
       }
     } catch (error) {
@@ -216,5 +217,8 @@
   setMode("login");
   if (new URLSearchParams(window.location.search).get("reason") === "expired") {
     showStatus("登录已失效，请重新登录。");
+  }
+  if (new URLSearchParams(window.location.search).get("reason") === "logout_pending") {
+    showStatus("已退出当前标签页，暂时无法确认服务器退出，请稍后重新登录。");
   }
 })();

@@ -5,10 +5,11 @@ import os
 import unittest
 from uuid import uuid4
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 
 from backend.app.api.dependencies import get_user_unit_of_work
 from backend.app.infrastructure.db.models.user import UserModel
+from backend.app.infrastructure.db.models.auth_session import AuthSessionModel, RefreshTokenModel
 from backend.app.infrastructure.db.session import session_scope
 from backend.app.infrastructure.db.unit_of_work import MySQLUserUnitOfWork
 from backend.app.infrastructure.security.password_hasher import Argon2PasswordHasher
@@ -103,6 +104,48 @@ class MySQLRegistrationTests(unittest.IsolatedAsyncioTestCase):
             connection.execute(update(UserModel).where(UserModel.username == self.username).values(is_active=False))
         self.assertEqual((await request_json(self.app, "/api/auth/me", headers={"Authorization": f"Bearer {tokens[0]}"}))[0], 401)
         self.assertEqual((await request_json(self.app, "/api/auth/me", headers={"Authorization": f"Bearer {tokens[1]}"}))[0], 200)
+
+    async def logged_in(self):
+        self.assertEqual((await post_json(self.app, self.payload))[0], 201)
+        status, result = await request_json(self.app, "/api/auth/login", "POST", {
+            "username": self.username, "password": self.payload["password"],
+        })
+        self.assertEqual(status, 200)
+        return result
+
+    async def test_parallel_same_refresh_operation_rotates_once_and_logout_revokes_access(self):
+        login = await self.logged_in()
+        payload = {"refresh_token": login["refresh_token"], "request_id": str(uuid4())}
+        responses = await asyncio.gather(*(
+            request_json(self.app, "/api/auth/refresh", "POST", payload) for _ in range(2)
+        ))
+        self.assertEqual([status for status, _ in responses], [200, 200])
+        first, second = [body for _, body in responses]
+        self.assertEqual(first["refresh_token"], second["refresh_token"])
+        with self.engine.connect() as connection:
+            count = connection.scalar(select(func.count()).select_from(RefreshTokenModel).join(AuthSessionModel)
+                .where(AuthSessionModel.id == login["refresh_token"].split(".")[0]))
+        self.assertEqual(count, 2)
+        status, _ = await request_json(self.app, "/api/auth/logout", "POST", {"refresh_token": login["refresh_token"]})
+        self.assertEqual(status, 204)
+        for token in (login["access_token"], first["access_token"]):
+            self.assertEqual((await request_json(self.app, "/api/auth/me", headers={"Authorization": f"Bearer {token}"}))[0], 401)
+
+    async def test_refresh_commit_failure_rolls_back_rotation_and_retry_can_recover(self):
+        login = await self.logged_in()
+        class FailingRefreshCommit(MySQLUserUnitOfWork):
+            def commit(self):
+                raise RuntimeError("simulated refresh commit failure")
+        def failed_transaction():
+            with session_scope(self.app.state.session_factory) as session:
+                yield FailingRefreshCommit(session)
+        payload = {"refresh_token": login["refresh_token"], "request_id": str(uuid4())}
+        self.app.dependency_overrides[get_user_unit_of_work] = failed_transaction
+        with self.assertLogs("backend.app.api.middleware.request_logging", level="ERROR"):
+            status, _ = await request_json(self.app, "/api/auth/refresh", "POST", payload)
+        self.assertEqual(status, 500)
+        self.app.dependency_overrides.pop(get_user_unit_of_work)
+        self.assertEqual((await request_json(self.app, "/api/auth/refresh", "POST", payload))[0], 200)
 
 
 if __name__ == "__main__":

@@ -5,4 +5,5 @@ script.py.mako：新迁移脚本模板。
 versions/：已生成、需要审查并提交 Git 的版本脚本。
 
 当前首个版本为 0001，已应用到本地 data_processing_platform 数据库，创建了 users 表和 alembic_version 版本跟踪表。
+当前本地版本为 0002，新增 auth_sessions、auth_refresh_tokens 及索引，原有用户数据不变。
 命令、配置及默认值说明见 backend/README.md。

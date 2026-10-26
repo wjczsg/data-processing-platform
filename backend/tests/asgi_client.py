@@ -43,7 +43,7 @@ async def request_json(app, path, method="GET", payload=None, headers=None):
 
     start = next(message for message in messages if message["type"] == "http.response.start")
     response = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
-    return start["status"], json.loads(response)
+    return start["status"], json.loads(response) if response else None
 
 
 async def post_json(app, payload):

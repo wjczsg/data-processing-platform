@@ -1,10 +1,12 @@
 """使用 PyJWT 签发、验证 HS256 访问令牌。"""
 
 from datetime import datetime, timezone
+import re
+from uuid import uuid4
 
 import jwt
 
-from backend.app.application.ports.token_service import AccessToken, InvalidAccessTokenError, TokenService
+from backend.app.application.ports.token_service import AccessIdentity, AccessToken, InvalidAccessTokenError, TokenService
 
 
 class JWTTokenService(TokenService):
@@ -19,18 +21,21 @@ class JWTTokenService(TokenService):
         self._secret_key = secret_key
         self._expires_in = expire_minutes * 60
 
-    def issue_access_token(self, user_id: int) -> AccessToken:
+    def issue_access_token(self, user_id: int, session_id: str) -> AccessToken:
         if type(user_id) is not int or user_id <= 0:
             raise ValueError("用户 ID 必须为正整数")
+        if not isinstance(session_id, str) or not re.fullmatch(r"[0-9a-f]{32}", session_id):
+            raise ValueError("登录会话编号无效")
         now = int(datetime.now(timezone.utc).timestamp())
         payload = {
             "sub": str(user_id), "iat": now, "exp": now + self._expires_in,
             "iss": self.ISSUER, "aud": self.AUDIENCE, "token_type": "access",
+            "sid": session_id, "jti": uuid4().hex,
         }
         token = jwt.encode(payload, self._secret_key, algorithm="HS256")
         return AccessToken(value=token, expires_in=self._expires_in)
 
-    def verify_access_token(self, token: str) -> int:
+    def verify_access_token(self, token: str) -> AccessIdentity:
         if not isinstance(token, str) or not token or len(token) > 4096:
             raise InvalidAccessTokenError("登录令牌无效或已过期")
         try:
@@ -38,7 +43,7 @@ class JWTTokenService(TokenService):
             payload = jwt.decode(
                 token, self._secret_key, algorithms=["HS256"],
                 issuer=self.ISSUER, audience=self.AUDIENCE,
-                options={"require": ["sub", "iat", "exp", "iss", "aud", "token_type"]},
+                options={"require": ["sub", "sid", "iat", "exp", "iss", "aud", "token_type"]},
             )
             subject = payload["sub"]
             if (
@@ -47,8 +52,10 @@ class JWTTokenService(TokenService):
                 or not subject.isascii()
                 or not subject.isdigit()
                 or int(subject) <= 0
+                or not isinstance(payload["sid"], str)
+                or not re.fullmatch(r"[0-9a-f]{32}", payload["sid"])
             ):
                 raise InvalidAccessTokenError("登录令牌无效或已过期")
-            return int(subject)
+            return AccessIdentity(user_id=int(subject), session_id=payload["sid"])
         except (jwt.PyJWTError, ValueError, TypeError) as error:
             raise InvalidAccessTokenError("登录令牌无效或已过期") from error

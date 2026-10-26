@@ -10,6 +10,7 @@
   let verified = false;
   let failures = 0;
   let retryTimer = null;
+  let refreshingStarted = false;
   function reveal() {
     $("auth-loading").hidden = true;
     document.body.dataset.authState = "ready";
@@ -33,6 +34,33 @@
     }
   }
 
+  function updateIdentity(user) {
+    $("current-username").textContent = user.username;
+    $("current-avatar").textContent = user.username.slice(0, 1).toUpperCase();
+    $("current-role").textContent = user.role === "admin" ? "管理员" : "普通用户";
+    $("auth-entry").hidden = true;
+    $("logout-button").hidden = false;
+    $("identity-badge").textContent = "已登录 · 示例数据";
+    $("session-notice").hidden = true;
+  }
+
+  function sessionExpired() {
+    stopped = true;
+    clearRetry();
+    session.stopAutoRefresh();
+    showFailure("登录已失效，请重新登录。页面内容已保留。", true);
+  }
+
+  function startRefresh() {
+    if (refreshingStarted) return;
+    refreshingStarted = true;
+    session.startAutoRefresh({
+      onUpdated(user) { if (!stopped) updateIdentity(user); },
+      onConnectionError() { if (!stopped) showFailure("续期暂时不可用，页面已保留，将自动重试。"); },
+      onExpired: sessionExpired,
+    });
+  }
+
   function scheduleRetry() {
     clearRetry();
     // 离线时等待浏览器 online 事件；其他临时失败逐步退避，最多每 30 秒一次。
@@ -51,21 +79,15 @@
       if (window.navigator?.onLine === false) throw new session.ConnectionError();
       const user = await session.currentUser();
       if (stopped) return;
-      $("current-username").textContent = user.username;
-      $("current-avatar").textContent = user.username.slice(0, 1).toUpperCase();
-      $("current-role").textContent = user.role === "admin" ? "管理员" : "普通用户";
-      $("auth-entry").hidden = true;
-      $("logout-button").hidden = false;
-      $("identity-badge").textContent = "已登录 · 示例数据";
-      $("session-notice").hidden = true;
+      updateIdentity(user);
       failures = 0;
       verified = true;
       reveal();
+      startRefresh();
     } catch (error) {
       if (stopped || error instanceof session.SessionChangedError) return;
       if (error instanceof session.SessionExpiredError) {
-        stopped = true;
-        showFailure("登录已失效，请重新登录。页面内容已保留。", true);
+        sessionExpired();
       } else if (error instanceof session.ConnectionError) {
         showFailure("连接暂时不可用，页面已保留，将自动重试。");
         scheduleRetry();
@@ -81,11 +103,16 @@
 
   $("auth-retry").addEventListener("click", () => { void verifyIdentity(); });
   $("session-retry").addEventListener("click", () => { void verifyIdentity(); });
-  $("logout-button").addEventListener("click", () => {
+  $("logout-button").addEventListener("click", async () => {
     stopped = true;
     clearRetry();
-    session.clear();
-    window.location.replace("auth.html");
+    $("logout-button").disabled = true;
+    try {
+      await session.logout();
+      window.location.replace("auth.html");
+    } catch {
+      window.location.replace("auth.html?reason=logout_pending");
+    }
   });
 
   if (preview) {

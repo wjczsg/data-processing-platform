@@ -6,14 +6,22 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from backend.app.api.dependencies import get_authentication_service, get_registration_service
-from backend.app.api.schemas.auth import LoginRequest, LoginResponse, RegisteredUserResponse, RegisterRequest
-from backend.app.application.authenticate_user import AuthenticationService, InvalidCredentialsError
+from backend.app.api.schemas.auth import LoginRequest, LoginResponse, LogoutRequest, RefreshRequest, RegisteredUserResponse, RegisterRequest
+from backend.app.application.authenticate_user import AuthenticationService, InvalidCredentialsError, LoginResult
 from backend.app.application.ports.token_service import InvalidAccessTokenError
 from backend.app.application.ports.user_repository import UsernameAlreadyExistsError
 from backend.app.application.register_user import RegisterUserService, RegistrationValidationError
 
 router = APIRouter(prefix="/api/auth", tags=["账号"])
 bearer = HTTPBearer(auto_error=False)
+
+
+def login_response(result: LoginResult, response: Response) -> LoginResponse:
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return LoginResponse(access_token=result.token.value, expires_in=result.token.expires_in,
+        refresh_token=result.refresh_token, refresh_expires_in=result.refresh_expires_in,
+        user=RegisteredUserResponse.model_validate(result.user))
 
 
 @router.post(
@@ -51,13 +59,27 @@ def login_user(
     except InvalidCredentialsError as error:
         raise HTTPException(status_code=401, detail="账号或密码错误",
                             headers={"WWW-Authenticate": "Bearer"}) from error
-    # 登录响应含有访问令牌，不允许浏览器或中间缓存保存响应副本。
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["Pragma"] = "no-cache"
-    return LoginResponse(
-        access_token=result.token.value, expires_in=result.token.expires_in,
-        user=RegisteredUserResponse.model_validate(result.user),
-    )
+    return login_response(result, response)
+
+
+@router.post("/refresh", response_model=LoginResponse)
+def refresh_login(payload: RefreshRequest, response: Response,
+    service: Annotated[AuthenticationService, Depends(get_authentication_service)],
+) -> LoginResponse:
+    try:
+        result = service.refresh(payload.refresh_token.get_secret_value(), payload.request_id)
+    except InvalidAccessTokenError as error:
+        raise HTTPException(status_code=401, detail="登录已失效，请重新登录",
+                            headers={"WWW-Authenticate": "Bearer"}) from error
+    return login_response(result, response)
+
+
+@router.post("/logout", status_code=204)
+def logout_user(payload: LogoutRequest,
+    service: Annotated[AuthenticationService, Depends(get_authentication_service)],
+) -> Response:
+    service.logout(payload.refresh_token.get_secret_value())
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/me", response_model=RegisteredUserResponse)

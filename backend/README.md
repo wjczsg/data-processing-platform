@@ -36,6 +36,7 @@
 | `MYSQL_PASSWORD` | 必填 | MySQL 连接密码，以 SecretStr 保存，不能为空 |
 | `JWT_SECRET_KEY` | 应用启动前必填 | 至少 32 字符的随机签名密钥，使用 SecretStr，不提交真实值 |
 | `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | 30 | 访问令牌有效分钟数，允许 1～1440 |
+| `AUTH_REFRESH_WINDOW_HOURS` | 12 | 每次成功续期后的恢复窗口，允许 1～168 小时 |
 
 正常启动时，读取优先级为：环境变量 > `.env` > 代码默认值。
 
@@ -59,7 +60,7 @@ MySQL 配置负责读取与校验，数据库引擎和会话工具通过传入�
 - `infrastructure/db/session.py` 的 `create_session_factory(engine)` 创建绑定到已有引擎的会话工厂，后续每次调用工厂会得到独立的 Session。
 - `session_scope(factory)` 支持 `with` 语法，异常时回滚并继续抛出异常，结束时始终关闭会话、释放其占用资源。
 - `session_scope` 不自动提交。业务层显式调用 `session.commit()`，或组织自己的事务边界；未提交事务在关闭会话时回滚。
-- 每个注册请求独立使用 Session；一个进程内复用引擎、会话工厂和密码哈希工具。应用启动时创建这些资源，关闭时释放连接池；真实数据库连接仍按需建立。
+- 每个账号请求独立使用 Session；一个进程内复用引擎、会话工厂和安全工具。应用启动时创建这些资源，关闭时释放连接池；真实数据库连接仍按需建立。
 - `infrastructure/db/unit_of_work.py` 使用同一会话组装用户仓储和提交操作，实现 `application/ports/unit_of_work.py` 的事务接口，应用业务不依赖 SQLAlchemy。
 
 ## 用户数据与数据库模型
@@ -78,7 +79,7 @@ ORM 中的时间使用 UTC，MySQL 以不带时区的 `DATETIME(6)` 保存。
 时间默认值及 `updated_at` 更新函数由 SQLAlchemy 写入时执行，直接使用 SQL 写入时需要显式提供或维护时间。
 业务层 `User` 是只读数据结构，尚未保存时 ID 和时间为空，密码哈希不包含在默认 repr 中；不能直接把包含哈希的对象作为接口响应。
 
-本地数据库 `data_processing_platform` 已应用首个迁移 `0001`，`users` 表已创建，账号唯一性等数据库约束已生效。
+本地数据库 `data_processing_platform` 已应用到迁移 `0002`。`users` 保持原结构和数据，新增 `auth_sessions` 和 `auth_refresh_tokens` 保存会话及续期凭据摘要/轮换历史。
 
 ## 用户数据访问
 
@@ -189,7 +190,17 @@ Remove-Item Env:RUN_MYSQL_TESTS
 
 `GET /api/auth/me` 需要 `Authorization: Bearer <access_token>`，先校验 JWT 签名、声明和到期时间，再查询数据库中的最新用户状态。令牌不包含密码、密码哈希或可供客户端选择的角色。
 
-登录响应禁止缓存；当前采用固定 HS256 算法、默认 30 分钟有效期。前端用当前标签页的 `sessionStorage` 保存令牌，登录后验证 `/me`，退出时清理本标签页令牌。当前未实现刷新、服务器端撤销和失败尝试限流。
+登录响应禁止缓存；采用固定 HS256 算法、默认 30 分钟有效期。JWT 带 `sid` 会话编号，`/me` 同时验证签名、用户和数据库会话状态。登录会写入并提交独立会话；已有账号数据不变。
+
+`POST /api/auth/refresh` 接收 `refresh_token` 和 UUID `request_id`，验证账号和会话后轮换凭据、续发令牌，将恢复窗口延长到当前时间之后默认 12 小时。每次操作先锁定会话，避免并发重复轮换。相同旧凭据和相同请求编号可以恢复同一轮换的丢失响应，但不重复延长窗口；旧凭据被用于不同操作或其后继已继续使用时，会撤销该会话。
+
+数据库只保存续期凭据的 SHA-256 摘要；高熵凭据的生成和恢复在 `infrastructure/security/refresh_credentials.py`，接口约定在 `application/ports/auth_sessions.py`。同操作结果由独立 HMAC 子密钥确定性恢复，不保存凭据明文。
+
+`POST /api/auth/logout` 接收续期凭据，撤销其会话，当前会话已签发的 JWT 也会被拒绝。客户端先清除本标签页凭据；如果网络不可达，会提示服务器退出暂未确认。当前仍未实现失败尝试限流。
+
+前端保存当前标签页凭据和到期元数据，按有效期提前约六分之一且最多 5 分钟续期，默认 30 分钟令牌约第 25 分钟申请。只读身份查询可在一次认证失败后尝试续期，再重试一次；其他写入接口不自动重复提交。
+
+前端模拟时钟检查：`node --test frontend/tests/auth-session.test.cjs`，无需实际等待 25 分钟。
 
 各文件、方法和前端状态的逐块说明见 [LOGIN_FLOW.md](LOGIN_FLOW.md)。
 
@@ -198,6 +209,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 - 根目录 `alembic.ini` 指向 `backend/migrations`，不包含数据库密码或连接 URL。
 - `backend/migrations/env.py` 在线时读取项目配置并复用数据库引擎，通过 `Base.metadata` 发现模型。
 - 首个版本 `0001_create_users_table.py` 的 `upgrade()` 创建用户表，`downgrade()` 删除该表及其数据。
+- `0002_create_auth_sessions.py` 仅新增登录会话及续期凭据表和索引，不修改用户表；降级会删除登录会话记录。
 - 生成迁移时不自动创建版本跟踪表；真正执行升级时才创建并更新 `alembic_version`。
 
 在项目根目录查看已有版本：
@@ -212,7 +224,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 .\.venv\Scripts\python.exe -m alembic upgrade head --sql
 ```
 
-应用迁移可执行 `.\.venv\Scripts\python.exe -m alembic upgrade head`。本地已执行 `upgrade 0001`，并通过 `alembic check` 确认数据库结构与当前模型一致。
+应用迁移可执行 `.\.venv\Scripts\python.exe -m alembic upgrade head`。本地已执行到 `0002`，并通过 `alembic check` 确认数据库结构与当前模型一致。
 首次应用会创建 `users` 和 `alembic_version`，不会自动插入用户。
 MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前需检查是否删除表或字段。
 自动生成的脚本必须审查，字段改名、数据转换和已有 CHECK 约束变更尤其需要手动核对。

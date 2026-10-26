@@ -3,6 +3,7 @@
 from typing import Protocol
 
 from backend.app.application.ports.user_repository import UserRepository
+from backend.app.application.ports.auth_sessions import AuthSessionRepository
 
 
 class UserUnitOfWork(Protocol):
@@ -12,6 +13,7 @@ class UserUnitOfWork(Protocol):
     """
 
     users: UserRepository
+    auth_sessions: AuthSessionRepository
 
     def commit(self) -> None:
         """提交当前业务事务，失败时继续抛出异常。"""

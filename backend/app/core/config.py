@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     mysql_password: SecretStr = Field(min_length=1)
     jwt_secret_key: SecretStr | None = None
     jwt_access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
+    auth_refresh_window_hours: int = Field(default=12, ge=1, le=168)
 
     @field_validator("jwt_secret_key", mode="before")
     @classmethod

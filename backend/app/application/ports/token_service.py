@@ -14,11 +14,17 @@ class AccessToken:
     expires_in: int
 
 
+@dataclass(frozen=True)
+class AccessIdentity:
+    user_id: int
+    session_id: str
+
+
 class TokenService(Protocol):
-    def issue_access_token(self, user_id: int) -> AccessToken:
+    def issue_access_token(self, user_id: int, session_id: str) -> AccessToken:
         """签发带有效期的访问令牌，仅包含身份信息。"""
         ...
 
-    def verify_access_token(self, token: str) -> int:
-        """验证后返回用户 ID，无效时抛 InvalidAccessTokenError。"""
+    def verify_access_token(self, token: str) -> AccessIdentity:
+        """验证后返回用户和会话身份，无效时抛 InvalidAccessTokenError。"""
         ...

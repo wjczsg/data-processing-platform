@@ -22,6 +22,7 @@ from backend.app.infrastructure.db.connection import create_database_engine
 from backend.app.infrastructure.db.session import create_session_factory
 from backend.app.infrastructure.security.password_hasher import Argon2PasswordHasher
 from backend.app.infrastructure.security.token_service import JWTTokenService
+from backend.app.infrastructure.security.refresh_credentials import OpaqueRefreshCredentials
 
 settings = get_settings()
 setup_logging(settings.log_level)
@@ -41,6 +42,8 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
             settings.jwt_secret_key.get_secret_value(), settings.jwt_access_token_expire_minutes,
         )
         application.state.dummy_password_hash = application.state.password_hasher.hash_password(secrets.token_urlsafe(32))
+        application.state.refresh_credentials = OpaqueRefreshCredentials(settings.jwt_secret_key.get_secret_value())
+        application.state.refresh_window_hours = settings.auth_refresh_window_hours
         logger.info("应用启动，环境=%s，版本=%s", settings.app_env, settings.app_version)
         yield
     finally:

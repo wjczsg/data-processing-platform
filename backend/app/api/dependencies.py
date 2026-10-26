@@ -7,6 +7,7 @@ from fastapi import Depends, Request
 from backend.app.application.authenticate_user import AuthenticationService
 
 from backend.app.application.ports.password_hasher import PasswordHasher
+from backend.app.application.ports.auth_sessions import RefreshCredentialCodec
 from backend.app.application.ports.unit_of_work import UserUnitOfWork
 from backend.app.application.ports.token_service import TokenService
 from backend.app.application.register_user import RegisterUserService
@@ -32,13 +33,23 @@ def get_dummy_password_hash(request: Request) -> str:
     return request.app.state.dummy_password_hash
 
 
+def get_refresh_credentials(request: Request) -> RefreshCredentialCodec:
+    return request.app.state.refresh_credentials
+
+
+def get_refresh_window_hours(request: Request) -> int:
+    return request.app.state.refresh_window_hours
+
+
 def get_authentication_service(
     unit_of_work: Annotated[UserUnitOfWork, Depends(get_user_unit_of_work)],
     password_hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
     tokens: Annotated[TokenService, Depends(get_token_service)],
     dummy_hash: Annotated[str, Depends(get_dummy_password_hash)],
+    credentials: Annotated[RefreshCredentialCodec, Depends(get_refresh_credentials)],
+    window_hours: Annotated[int, Depends(get_refresh_window_hours)],
 ) -> AuthenticationService:
-    return AuthenticationService(unit_of_work.users, password_hasher, tokens, dummy_hash)
+    return AuthenticationService(unit_of_work, password_hasher, tokens, credentials, dummy_hash, window_hours)
 
 
 def get_registration_service(
