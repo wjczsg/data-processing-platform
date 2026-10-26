@@ -24,12 +24,12 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         self.app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
         self.app.dependency_overrides[get_authentication_service] = lambda: self.service
 
-    async def upload(self, files, token="test-access", owner_id=None):
+    async def upload(self, files, token="test-access", owner_id=None, *, file_content_type="text/csv"):
         boundary = "test-upload-boundary"
         parts = []
         for field, filename, content in files:
             parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="{field}"; '
-                          f'filename="{filename}"\r\nContent-Type: text/csv\r\n\r\n').encode()
+                          f'filename="{filename}"\r\nContent-Type: {file_content_type}\r\n\r\n').encode()
                          + content + b"\r\n")
         if owner_id is not None:
             parts.append((f'--{boundary}\r\nContent-Disposition: form-data; name="owner_id"'
@@ -61,6 +61,26 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missing_file_is_rejected(self):
         self.assertEqual((await self.upload([]))[0], 422)
+
+    async def test_csv_extension_is_case_insensitive(self):
+        for filename in ("orders.csv", "orders.CSV", "orders.CsV"):
+            with self.subTest(filename=filename):
+                status, body = await self.upload([("file", filename, b"order_id\nORD1\n")])
+                self.assertEqual(status, 200)
+                self.assertEqual(body["filename"], filename)
+
+    async def test_invalid_or_missing_extensions_are_rejected_despite_csv_content_type(self):
+        for filename in ("orders.xlsx", "orders.txt", "orders.csv.exe", "orders", "", ".csv"):
+            with self.subTest(filename=filename):
+                status, body = await self.upload([("file", filename, b"order_id\nORD1\n")])
+                self.assertEqual((status, body), (422, {"detail": "仅支持上传 CSV 文件（.csv）"}))
+
+    async def test_csv_extension_does_not_require_browser_to_report_csv_content_type(self):
+        for content_type in ("text/plain", "application/octet-stream"):
+            with self.subTest(content_type=content_type):
+                status, _ = await self.upload([("file", "orders.csv", b"order_id\nORD1\n")],
+                    file_content_type=content_type)
+                self.assertEqual(status, 200)
 
     async def test_multiple_files_are_rejected_even_with_different_field_names(self):
         for other_field in ("file", "another_file"):
