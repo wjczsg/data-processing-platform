@@ -3,19 +3,20 @@
 import json
 
 
-async def post_json(app, payload):
-    body = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+async def request_json(app, path, method="GET", payload=None, headers=None):
+    body = json.dumps(payload, ensure_ascii=True).encode("utf-8") if payload is not None else b""
     scope = {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.4"},
         "http_version": "1.1",
-        "method": "POST",
+        "method": method,
         "scheme": "http",
-        "path": "/api/auth/register",
-        "raw_path": b"/api/auth/register",
+        "path": path,
+        "raw_path": path.encode(),
         "query_string": b"",
         "root_path": "",
-        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())],
+        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]
+        + [(key.lower().encode(), value.encode()) for key, value in (headers or {}).items()],
         "client": ("127.0.0.1", 1234),
         "server": ("testserver", 80),
         "state": {},
@@ -43,3 +44,7 @@ async def post_json(app, payload):
     start = next(message for message in messages if message["type"] == "http.response.start")
     response = b"".join(message.get("body", b"") for message in messages if message["type"] == "http.response.body")
     return start["status"], json.loads(response)
+
+
+async def post_json(app, payload):
+    return await request_json(app, "/api/auth/register", "POST", payload)

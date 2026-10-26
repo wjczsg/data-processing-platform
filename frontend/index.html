@@ -4,13 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f6f7f8">
+  <meta name="api-base-url" content="http://127.0.0.1:8000">
   <title>行序 · 数据处理工作台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23273732'/%3E%3Cpath d='M8 10h16M8 16h10M8 22h16' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="styles.css">
+  <script defer src="auth-session.js"></script>
+  <script defer src="workbench-auth.js"></script>
   <script defer src="demo-data.js"></script>
   <script defer src="app.js"></script>
 </head>
-<body>
+<body data-auth-state="pending">
+  <section id="auth-loading" class="auth-loading" role="status"><p id="auth-loading-text">正在验证登录状态…</p><button id="auth-retry" class="button" hidden>重试</button><a href="auth.html">返回登录</a></section>
   <svg class="svg-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
     <symbol id="i-tasks" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="m7 8 1 1 2-2m3 1h4M7 13h10M7 17h7"/></symbol>
@@ -38,11 +42,11 @@
       <button class="nav-item" data-view="rules"><svg><use href="#i-rules"/></svg>处理规则</button>
     </nav>
     <div class="sidebar-note"><span class="small-dot"></span>页面预览工作区<p>先确认页面，再逐步实现功能。</p></div>
-    <div class="sidebar-bottom"><span class="avatar">陈</span><div><strong>陈同学</strong><span>演示成员</span></div><span class="version">v0.1</span></div>
+    <div class="sidebar-bottom"><span class="avatar" id="current-avatar">陈</span><div><strong id="current-username">陈同学</strong><span id="current-role">演示成员</span></div><span class="version">v0.1</span></div>
   </aside>
 
   <div class="shell">
-    <header class="topbar"><div class="breadcrumb">工作区 <svg><use href="#i-arrow"/></svg><span id="breadcrumb-current">导入任务</span></div><div class="topbar-right"><a class="plain-button" href="auth.html">登录 / 注册</a><span class="prototype-badge">前端原型</span><button class="plain-button" id="help-button"><svg><use href="#i-info"/></svg>使用说明</button></div></header>
+    <header class="topbar"><div class="breadcrumb">工作区 <svg><use href="#i-arrow"/></svg><span id="breadcrumb-current">导入任务</span></div><div class="topbar-right"><a class="plain-button" id="auth-entry" href="auth.html">登录 / 注册</a><button class="plain-button" id="logout-button" type="button" hidden>退出登录</button><span class="prototype-badge" id="identity-badge">前端原型</span><button class="plain-button" id="help-button"><svg><use href="#i-info"/></svg>使用说明</button></div></header>
     <main>
       <section class="page-heading"><div><div class="eyebrow">数据工作台</div><h1 id="page-title">导入任务</h1><p id="page-description">管理文件导入，跟踪处理进度，查看数据质量。</p></div><div class="heading-actions"><button class="button" id="template-button" disabled title="待接入后端"><svg><use href="#i-download"/></svg>下载模板</button><button class="button primary" id="new-task-button"><svg><use href="#i-plus"/></svg>新建导入</button></div></section>
 

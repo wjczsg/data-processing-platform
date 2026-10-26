@@ -79,6 +79,20 @@ class MySQLConfigTests(unittest.TestCase):
             self.settings(mysql_port=invalid_port)
         self.assertNotIn(invalid_port, str(result.exception))
 
+    def test_jwt_key_is_masked_and_lifetime_is_bounded(self):
+        key = "test-only-jwt-key-" + "x" * 32
+        settings = self.settings(jwt_secret_key=key)
+        self.assertEqual(settings.jwt_secret_key.get_secret_value(), key)
+        self.assertNotIn(key, repr(settings))
+        self.assertNotIn(key, settings.model_dump_json())
+        self.assertEqual(settings.jwt_access_token_expire_minutes, 30)
+        for invalid_key in ("short", " " * 32):
+            with self.assertRaises(ValidationError):
+                self.settings(jwt_secret_key=invalid_key)
+        for minutes in (0, 1441):
+            with self.assertRaises(ValidationError):
+                self.settings(jwt_access_token_expire_minutes=minutes)
+
 
 if __name__ == "__main__":
     unittest.main()

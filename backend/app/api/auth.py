@@ -1,15 +1,19 @@
-"""认证相关 HTTP 接口，当前提供注册。"""
+"""账号注册、登录及查询当前用户的 HTTP 接口。"""
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from backend.app.api.dependencies import get_registration_service
-from backend.app.api.schemas.auth import RegisteredUserResponse, RegisterRequest
+from backend.app.api.dependencies import get_authentication_service, get_registration_service
+from backend.app.api.schemas.auth import LoginRequest, LoginResponse, RegisteredUserResponse, RegisterRequest
+from backend.app.application.authenticate_user import AuthenticationService, InvalidCredentialsError
+from backend.app.application.ports.token_service import InvalidAccessTokenError
 from backend.app.application.ports.user_repository import UsernameAlreadyExistsError
 from backend.app.application.register_user import RegisterUserService, RegistrationValidationError
 
 router = APIRouter(prefix="/api/auth", tags=["账号"])
+bearer = HTTPBearer(auto_error=False)
 
 
 @router.post(
@@ -33,4 +37,41 @@ def register_user(
     except UsernameAlreadyExistsError as error:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="用户名已存在") from error
 
+    return RegisteredUserResponse.model_validate(user)
+
+
+@router.post("/login", response_model=LoginResponse)
+def login_user(
+    payload: LoginRequest,
+    response: Response,
+    service: Annotated[AuthenticationService, Depends(get_authentication_service)],
+) -> LoginResponse:
+    try:
+        result = service.login(payload.username, payload.password.get_secret_value())
+    except InvalidCredentialsError as error:
+        raise HTTPException(status_code=401, detail="账号或密码错误",
+                            headers={"WWW-Authenticate": "Bearer"}) from error
+    # 登录响应含有访问令牌，不允许浏览器或中间缓存保存响应副本。
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return LoginResponse(
+        access_token=result.token.value, expires_in=result.token.expires_in,
+        user=RegisteredUserResponse.model_validate(result.user),
+    )
+
+
+@router.get("/me", response_model=RegisteredUserResponse)
+def current_user(
+    response: Response,
+    service: Annotated[AuthenticationService, Depends(get_authentication_service)],
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> RegisteredUserResponse:
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="请先登录", headers={"WWW-Authenticate": "Bearer"})
+    try:
+        user = service.current_user(credentials.credentials)
+    except InvalidAccessTokenError as error:
+        raise HTTPException(status_code=401, detail="登录已失效，请重新登录",
+                            headers={"WWW-Authenticate": "Bearer"}) from error
+    response.headers["Cache-Control"] = "no-store"
     return RegisteredUserResponse.model_validate(user)

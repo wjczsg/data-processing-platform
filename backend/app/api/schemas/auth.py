@@ -31,3 +31,18 @@ class RegisteredUserResponse(BaseModel):
     def include_utc_timezone(cls, value: datetime) -> datetime:
         # 数据库存的是不带时区的 UTC，HTTP 响应显式标记时区。
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    username: str = Field(strict=True, min_length=1)
+    # 登录不套用注册的最小长度或弱密码规则。
+    password: SecretStr = Field(min_length=1, max_length=PASSWORD_MAX_LENGTH)
+
+
+class LoginResponse(BaseModel):
+    access_token: str = Field(repr=False)
+    token_type: str = "bearer"
+    expires_in: int
+    user: RegisteredUserResponse

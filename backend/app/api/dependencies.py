@@ -4,9 +4,11 @@ from collections.abc import Iterator
 from typing import Annotated
 
 from fastapi import Depends, Request
+from backend.app.application.authenticate_user import AuthenticationService
 
 from backend.app.application.ports.password_hasher import PasswordHasher
 from backend.app.application.ports.unit_of_work import UserUnitOfWork
+from backend.app.application.ports.token_service import TokenService
 from backend.app.application.register_user import RegisterUserService
 from backend.app.infrastructure.db.session import session_scope
 from backend.app.infrastructure.db.unit_of_work import MySQLUserUnitOfWork
@@ -20,6 +22,23 @@ def get_user_unit_of_work(request: Request) -> Iterator[UserUnitOfWork]:
 
 def get_password_hasher(request: Request) -> PasswordHasher:
     return request.app.state.password_hasher
+
+
+def get_token_service(request: Request) -> TokenService:
+    return request.app.state.token_service
+
+
+def get_dummy_password_hash(request: Request) -> str:
+    return request.app.state.dummy_password_hash
+
+
+def get_authentication_service(
+    unit_of_work: Annotated[UserUnitOfWork, Depends(get_user_unit_of_work)],
+    password_hasher: Annotated[PasswordHasher, Depends(get_password_hasher)],
+    tokens: Annotated[TokenService, Depends(get_token_service)],
+    dummy_hash: Annotated[str, Depends(get_dummy_password_hash)],
+) -> AuthenticationService:
+    return AuthenticationService(unit_of_work.users, password_hasher, tokens, dummy_hash)
 
 
 def get_registration_service(

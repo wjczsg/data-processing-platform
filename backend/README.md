@@ -1,6 +1,6 @@
 # 后端基础骨架
 
-当前已实现 FastAPI 应用入口、健康检查、统一配置、请求日志和用户注册接口。数据库连接池、会话和密码哈希能力已接入应用生命周期，注册请求使用独立事务。
+当前已实现 FastAPI 应用入口、健康检查、统一配置、请求日志、注册、登录和当前用户接口。数据库连接池、会话、密码哈希和 JWT 工具已接入应用生命周期，注册请求使用独立事务。
 
 ## 启动
 
@@ -34,6 +34,8 @@
 | `MYSQL_DATABASE` | data_processing_platform | 项目数据库名，不能为空 |
 | `MYSQL_USER` | 必填 | MySQL 连接账号，不能为空 |
 | `MYSQL_PASSWORD` | 必填 | MySQL 连接密码，以 SecretStr 保存，不能为空 |
+| `JWT_SECRET_KEY` | 应用启动前必填 | 至少 32 字符的随机签名密钥，使用 SecretStr，不提交真实值 |
+| `JWT_ACCESS_TOKEN_EXPIRE_MINUTES` | 30 | 访问令牌有效分钟数，允许 1～1440 |
 
 正常启动时，读取优先级为：环境变量 > `.env` > 代码默认值。
 
@@ -44,7 +46,7 @@
 
 `get_settings()` 在每个进程内缓存配置。修改 `.env` 或环境变量后，需要重启后端；不要依赖 `--reload` 自动监测 `.env`。
 
-`.env` 已加入 Git 忽略规则，可提交 `.env.example` 供其他开发者参考。模板中的账号和密码留空；JWT 配置将在认证模块加入。
+`.env` 已加入 Git 忽略规则，可提交 `.env.example` 供其他开发者参考。模板中的数据库凭据及 JWT 密钥留空；首次配置还需生成随机 JWT 密钥，方法见 [登录说明](LOGIN_FLOW.md)。当前电脑已生成并保存本机密钥。
 
 MySQL 配置负责读取与校验，数据库引擎和会话工具通过传入的配置或引擎创建，不在导入时自动连接数据库。
 普通配置表示和 JSON 序列化会遮蔽密码；密码原始字符（包括前导零和前后空格）保持不变。
@@ -86,7 +88,7 @@ ORM 中的时间使用 UTC，MySQL 以不带时区的 `DATETIME(6)` 保存。
 - `add()` 只接收 ID 为空的新用户；密码哈希需预先生成。调用 `flush()` 后返回带 ID 和时间的新对象，不修改原来的只读对象。
 - 用户名唯一约束冲突转换为 `UsernameAlreadyExistsError`，其他数据库异常继续抛出。数据库约束负责阻止并发重复写入，注册前的查询不能代替此约束。
 - 数据访问层不提交、回滚或关闭会话。调用方组织事务，成功后显式 `commit()`，异常由现有 `session_scope()` 回滚并释放连接。
-- 用户数据访问已接入注册 HTTP 接口和前端注册按钮；登录接口尚未接入。
+- 用户数据访问已接入注册、登录、当前用户 HTTP 接口及前端账号页面。
 
 真实 MySQL 集成测试需先应用迁移，再在项目根目录显式开启：
 
@@ -111,7 +113,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 
 前端注册页显示相同长度要求，并提供长度、确认密码的本地输入提示；后端函数在注册业务中执行完整规则校验。
 已安装密码哈希库 `argon2-cffi==25.1.0`，其 `PasswordHasher` 默认使用 Argon2id；依赖记录在根目录 `requirements.txt`。
-哈希生成、密码验证和注册 HTTP 接口已实现；登录 HTTP 接口尚未实现。
+哈希生成、密码验证、注册和登录 HTTP 接口均已实现。
 
 规则测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_password_policy -v`。
 
@@ -166,8 +168,8 @@ matches = hasher.verify_password(password, password_hash)
 - `201`：注册成功，返回 `id`、`username`、`role`、`is_active`、`created_at`、`updated_at`，时间包含 UTC 标记。
 - `409`：账号已存在。`422`：字段或密码规则不符合要求。`500`：未预期的内部处理失败，响应不暴露数据库或哈希异常细节。
 - 请求校验错误统一只返回错误位置、描述和类型，移除默认错误详情中的原始输入，避免回显明文密码。
-- 注册成功不会自动登录或签发令牌。前端注册按钮已接入，成功后切回登录表单；登录提交仍未开放。
-- `api/middleware/cors.py` 使用配置中的来源名单，允许注册所需的 `POST` 和 `Content-Type` 跨域请求，不启用 Cookie 凭据。默认支持两个本地 `8765` 来源，其他来源预检被拒绝。
+- 注册成功不会自动登录或签发令牌。前端注册按钮已接入，成功后切回登录表单，用户再提交登录。
+- `api/middleware/cors.py` 使用配置中的来源名单，允许账号所需的 `GET`、`POST`、`Content-Type` 及 `Authorization` 跨域请求，不启用 Cookie 凭据。默认支持两个本地 `8765` 来源，其他来源预检被拒绝。
 
 接口规则测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_registration -v`。
 
@@ -180,6 +182,16 @@ Remove-Item Env:RUN_MYSQL_TESTS
 ```
 
 覆盖请求到数据库的实际提交、并发唯一性、提交失败时回滚及连接释放，不会清空用户表。自增 ID 计数可能前进。
+
+## 登录及当前用户
+
+`POST /api/auth/login` 接收 JSON `username`、`password`。成功返回 `access_token`、`token_type: bearer`、`expires_in` 和公开用户信息；账号不存在、密码错误或账号停用统一返回 `401`“账号或密码错误”。
+
+`GET /api/auth/me` 需要 `Authorization: Bearer <access_token>`，先校验 JWT 签名、声明和到期时间，再查询数据库中的最新用户状态。令牌不包含密码、密码哈希或可供客户端选择的角色。
+
+登录响应禁止缓存；当前采用固定 HS256 算法、默认 30 分钟有效期。前端用当前标签页的 `sessionStorage` 保存令牌，登录后验证 `/me`，退出时清理本标签页令牌。当前未实现刷新、服务器端撤销和失败尝试限流。
+
+各文件、方法和前端状态的逐块说明见 [LOGIN_FLOW.md](LOGIN_FLOW.md)。
 
 ## 数据库迁移
 

@@ -38,6 +38,24 @@ class Settings(BaseSettings):
     mysql_database: str = Field(default="data_processing_platform", min_length=1)
     mysql_user: str = Field(min_length=1)
     mysql_password: SecretStr = Field(min_length=1)
+    jwt_secret_key: SecretStr | None = None
+    jwt_access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
+
+    @field_validator("jwt_secret_key", mode="before")
+    @classmethod
+    def preserve_jwt_key(cls, value: object) -> object:
+        if value == "":
+            return None
+        return SecretStr(value) if isinstance(value, str) else value
+
+    @field_validator("jwt_secret_key")
+    @classmethod
+    def validate_jwt_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            secret = value.get_secret_value()
+            if len(secret) < 32 or not secret.strip():
+                raise ValueError("JWT 密钥必须至少为 32 个字符，且不能全部为空白")
+        return value
 
     @field_validator("mysql_password", mode="before")
     @classmethod

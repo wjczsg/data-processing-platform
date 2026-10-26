@@ -5,14 +5,14 @@ import os
 import unittest
 from uuid import uuid4
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from backend.app.api.dependencies import get_user_unit_of_work
 from backend.app.infrastructure.db.models.user import UserModel
 from backend.app.infrastructure.db.session import session_scope
 from backend.app.infrastructure.db.unit_of_work import MySQLUserUnitOfWork
 from backend.app.infrastructure.security.password_hasher import Argon2PasswordHasher
-from backend.tests.asgi_client import post_json
+from backend.tests.asgi_client import post_json, request_json
 
 
 @unittest.skipUnless(os.environ.get("RUN_MYSQL_TESTS") == "1", "需要显式开启 MySQL 集成测试")
@@ -25,6 +25,7 @@ class MySQLRegistrationTests(unittest.IsolatedAsyncioTestCase):
         await self.lifecycle.__aenter__()
         self.engine = app.state.database_engine
         self.username = "it_register_" + uuid4().hex[:16]
+        self.usernames = [self.username]
         self.payload = {
             "username": self.username,
             "password": "  IntegrationPassword42!  ",
@@ -35,7 +36,7 @@ class MySQLRegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.app.dependency_overrides.pop(get_user_unit_of_work, None)
         try:
             with self.engine.begin() as connection:
-                connection.execute(delete(UserModel).where(UserModel.username == self.username))
+                connection.execute(delete(UserModel).where(UserModel.username.in_(self.usernames)))
         finally:
             await self.lifecycle.__aexit__(None, None, None)
 
@@ -79,6 +80,29 @@ class MySQLRegistrationTests(unittest.IsolatedAsyncioTestCase):
             row = connection.execute(select(UserModel.id).where(UserModel.username == self.username)).first()
         self.assertIsNone(row)
         self.assertEqual(self.engine.pool.checkedout(), 0)
+
+    async def test_registered_users_log_in_as_their_own_identity_and_disabled_user_is_rejected(self):
+        other = self.username + "_b"
+        self.usernames.append(other)
+        registered_ids = []
+        tokens = []
+        for username in self.usernames:
+            status, user = await post_json(self.app, {**self.payload, "username": username})
+            self.assertEqual(status, 201)
+            registered_ids.append(user["id"])
+            status, login = await request_json(self.app, "/api/auth/login", "POST", {
+                "username": username, "password": self.payload["password"],
+            })
+            self.assertEqual(status, 200)
+            tokens.append(login["access_token"])
+            status, current = await request_json(self.app, "/api/auth/me", headers={"Authorization": f"Bearer {tokens[-1]}"})
+            self.assertEqual((status, current["id"]), (200, user["id"]))
+        self.assertNotEqual(registered_ids[0], registered_ids[1])
+        self.assertEqual((await request_json(self.app, "/api/auth/me"))[0], 401)
+        with self.engine.begin() as connection:
+            connection.execute(update(UserModel).where(UserModel.username == self.username).values(is_active=False))
+        self.assertEqual((await request_json(self.app, "/api/auth/me", headers={"Authorization": f"Bearer {tokens[0]}"}))[0], 401)
+        self.assertEqual((await request_json(self.app, "/api/auth/me", headers={"Authorization": f"Bearer {tokens[1]}"}))[0], 200)
 
 
 if __name__ == "__main__":
