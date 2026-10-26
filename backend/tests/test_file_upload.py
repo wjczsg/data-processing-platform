@@ -12,6 +12,7 @@ from backend.app.api.files import router
 from backend.app.application.ports.token_service import InvalidAccessTokenError
 from backend.app.core.config import Settings, get_settings
 from backend.app.domain.user import User
+from backend.app.infrastructure.files.encoding import Utf8FileValidator
 from backend.tests.asgi_client import request_json
 
 
@@ -94,6 +95,41 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(status, 200)
                 self.assertEqual(body["size_bytes"], len(content))
 
+    async def test_utf8_chinese_and_optional_bom_preserve_original_byte_count(self):
+        data = "order_id,product,amount,order_date\n订单1,键盘,199,2026-10-27\n".encode("utf-8")
+        for content in (data, b"\xef\xbb\xbf" + data):
+            with self.subTest(has_bom=content.startswith(b"\xef\xbb\xbf")):
+                status, body = await self.upload([("file", "orders.csv", content)])
+                self.assertEqual((status, body["size_bytes"]), (200, len(content)))
+
+    async def test_multibyte_characters_split_between_read_chunks_are_accepted(self):
+        for character in ("中", "🙂"):
+            with self.subTest(character=character):
+                content = b"a" * (1024 * 1024 - 1) + character.encode("utf-8") + b"\n"
+                status, body = await self.upload([("file", "orders.csv", content)])
+                self.assertEqual((status, body["size_bytes"]), (200, len(content)))
+
+    async def test_invalid_utf8_is_rejected_including_errors_after_first_read_chunk(self):
+        for content in (b"secret-order\xff", "中文".encode("gbk"), "orders".encode("utf-16"),
+                        b"a" * (1024 * 1024) + b"\xff"):
+            with self.subTest(size=len(content)):
+                status, body = await self.upload([("file", "orders.csv", content)])
+                self.assertEqual((status, body), (422, {
+                    "detail": "文件无法按 UTF-8 解码，请另存为 UTF-8 编码后重新上传",
+                }))
+
+    async def test_incomplete_characters_and_partial_bom_at_eof_are_rejected(self):
+        for content in (b"\xe4", b"\xe4\xb8", b"\xef", b"\xef\xbb", b"orders\n\xf0\x9f\x99"):
+            with self.subTest(content=content):
+                status, body = await self.upload([("file", "orders.csv", content)])
+                self.assertEqual((status, body), (422, {
+                    "detail": "文件无法按 UTF-8 解码，请另存为 UTF-8 编码后重新上传",
+                }))
+
+    async def test_failed_upload_does_not_leave_decoder_state_for_next_request(self):
+        self.assertEqual((await self.upload([("file", "broken.csv", b"\xe4")]))[0], 422)
+        self.assertEqual((await self.upload([("file", "orders.csv", b"order_id\nORD1\n")]))[0], 200)
+
     async def test_csv_extension_is_case_insensitive(self):
         for filename in ("orders.csv", "orders.CSV", "orders.CsV"):
             with self.subTest(filename=filename):
@@ -121,6 +157,14 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
                     ("file", "one.csv", b"one"), (other_field, "two.csv", b"two"),
                 ])
                 self.assertEqual((status, body), (422, {"detail": "每次只能上传一个文件"}))
+
+
+class Utf8FileValidatorTests(unittest.TestCase):
+    def test_bom_and_multibyte_characters_can_be_split_at_every_byte(self):
+        validator = Utf8FileValidator()
+        for value in b"\xef\xbb\xbf" + "中文🙂".encode("utf-8"):
+            validator.validate_chunk(bytes([value]))
+        validator.finish()
 
 
 if __name__ == "__main__":

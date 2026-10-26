@@ -11,11 +11,13 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.domain.file_rules import (
     EmptyFileError,
     FileTooLargeError,
+    InvalidFileEncodingError,
     validate_csv_filename,
     validate_file_size,
     validate_non_empty_file,
 )
 from backend.app.domain.user import User
+from backend.app.infrastructure.files.encoding import Utf8FileValidator
 
 router = APIRouter(prefix="/api/files", tags=["文件"])
 
@@ -24,7 +26,7 @@ router = APIRouter(prefix="/api/files", tags=["文件"])
     "",
     response_model=FileReceiveResponse,
     summary="临时接收单个文件",
-    description="验证登录，仅接收非零字节的 .csv 文件（扩展名不区分大小写）。CSV 内容解析、正式存储、数据库记录和后台任务尚未接入。",
+    description="验证登录，仅接收非零字节、UTF-8 编码的 .csv 文件（兼容 UTF-8 BOM，扩展名不区分大小写）。CSV 结构解析、正式存储、数据库记录和后台任务尚未接入。",
     responses={413: {"description": "文件内容大小超过 UPLOAD_MAX_BYTES 配置上限，默认 50 MiB"}},
 )
 async def receive_file(
@@ -46,16 +48,19 @@ async def receive_file(
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
-    # 分块读取以确认实际内容大小，避免一次性把整个文件读入内存。
+    # 同一轮分块读取累计大小、校验编码；每个文件独立保留解码状态。
     size_bytes = 0
+    encoding_validator = Utf8FileValidator()
     try:
         while chunk := await file.read(1024 * 1024):
             size_bytes += len(chunk)
             validate_file_size(size_bytes, settings.upload_max_bytes)
+            encoding_validator.validate_chunk(chunk)
         validate_non_empty_file(size_bytes)
+        encoding_validator.finish()
     except FileTooLargeError as error:
         raise HTTPException(status_code=413, detail=str(error)) from error
-    except EmptyFileError as error:
+    except (EmptyFileError, InvalidFileEncodingError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
     # 临时文件由 FastAPI 在请求结束时关闭；正式存储后续通过存储接口接入。

@@ -11,6 +11,10 @@ class EmptyFileError(ValueError):
     """实际文件内容为零字节。"""
 
 
+class InvalidFileEncodingError(ValueError):
+    """文件字节无法按要求的 UTF-8 编码完整解码。"""
+
+
 def validate_csv_filename(filename: str | None) -> None:
     """只允许 .csv 扩展名，忽略大小写；文件内容合法性由后续解析确认。"""
     if not filename or PurePath(filename).suffix.lower() != ".csv":
