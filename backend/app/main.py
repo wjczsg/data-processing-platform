@@ -14,6 +14,7 @@ from backend.app.api.exception_handlers import (
     unhandled_exception_handler,
 )
 from backend.app.api.health import router as health_router
+from backend.app.api.files import router as files_router
 from backend.app.api.middleware.cors import configure_cors
 from backend.app.api.middleware.request_logging import RequestLoggingMiddleware
 from backend.app.core.config import get_settings
@@ -64,3 +65,4 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(files_router)

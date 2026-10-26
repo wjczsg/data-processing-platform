@@ -3,8 +3,11 @@
 import json
 
 
-async def request_json(app, path, method="GET", payload=None, headers=None):
-    body = json.dumps(payload, ensure_ascii=True).encode("utf-8") if payload is not None else b""
+async def request_json(app, path, method="GET", payload=None, headers=None, *,
+                       raw_body=None, content_type="application/json"):
+    body = raw_body if raw_body is not None else (
+        json.dumps(payload, ensure_ascii=True).encode("utf-8") if payload is not None else b""
+    )
     scope = {
         "type": "http",
         "asgi": {"version": "3.0", "spec_version": "2.4"},
@@ -15,7 +18,7 @@ async def request_json(app, path, method="GET", payload=None, headers=None):
         "raw_path": path.encode(),
         "query_string": b"",
         "root_path": "",
-        "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]
+        "headers": [(b"content-type", content_type.encode()), (b"content-length", str(len(body)).encode())]
         + [(key.lower().encode(), value.encode()) for key, value in (headers or {}).items()],
         "client": ("127.0.0.1", 1234),
         "server": ("testserver", 80),
