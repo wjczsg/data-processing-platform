@@ -3,17 +3,16 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from backend.app.api.dependencies import get_authentication_service, get_registration_service
+from backend.app.api.dependencies import get_authentication_service, get_current_user, get_registration_service
 from backend.app.api.schemas.auth import LoginRequest, LoginResponse, LogoutRequest, RefreshRequest, RegisteredUserResponse, RegisterRequest
 from backend.app.application.authenticate_user import AuthenticationService, InvalidCredentialsError, LoginResult
 from backend.app.application.ports.token_service import InvalidAccessTokenError
 from backend.app.application.ports.user_repository import UsernameAlreadyExistsError
 from backend.app.application.register_user import RegisterUserService, RegistrationValidationError
+from backend.app.domain.user import User
 
 router = APIRouter(prefix="/api/auth", tags=["账号"])
-bearer = HTTPBearer(auto_error=False)
 
 
 def login_response(result: LoginResult, response: Response) -> LoginResponse:
@@ -85,15 +84,7 @@ def logout_user(payload: LogoutRequest,
 @router.get("/me", response_model=RegisteredUserResponse)
 def current_user(
     response: Response,
-    service: Annotated[AuthenticationService, Depends(get_authentication_service)],
-    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+    user: Annotated[User, Depends(get_current_user)],
 ) -> RegisteredUserResponse:
-    if credentials is None:
-        raise HTTPException(status_code=401, detail="请先登录", headers={"WWW-Authenticate": "Bearer"})
-    try:
-        user = service.current_user(credentials.credentials)
-    except InvalidAccessTokenError as error:
-        raise HTTPException(status_code=401, detail="登录已失效，请重新登录",
-                            headers={"WWW-Authenticate": "Bearer"}) from error
     response.headers["Cache-Control"] = "no-store"
     return RegisteredUserResponse.model_validate(user)
