@@ -13,7 +13,7 @@ const result = (overrides = {}) => ({ filename: 'students.csv', size_bytes: 20, 
 class Element {
   constructor(tag = 'div') {
     this.tagName = tag; this.children = []; this.listeners = new Map(); this.attributes = new Map();
-    this.hidden = false; this.disabled = false; this.files = []; this.value = ''; this.text = '';
+    this.hidden = false; this.disabled = false; this.checked = false; this.files = []; this.value = ''; this.text = '';
     const classes = new Set();
     this.classList = { add: name => classes.add(name), remove: name => classes.delete(name) };
   }
@@ -39,7 +39,8 @@ function page(fetcher, { previewOnly = false, currentUser } = {}) {
   const ids = ['upload-form', 'upload-dialog', 'file-input', 'upload-status', 'upload-error', 'upload-login',
     'dropzone', 'submit-upload', 'upload-result', 'upload-preview-head', 'upload-preview-body', 'drop-title',
     'drop-subtitle', 'upload-result-meta', 'upload-preview-scroll', 'upload-empty-preview', 'upload-truncated',
-    'new-task-button'];
+    'new-task-button', 'upload-header-options', 'upload-header-yes', 'upload-header-no',
+    'confirm-upload-header', 'upload-header-status', 'upload-preview-note'];
   const elements = new Map(ids.map(id => [id, new Element()]));
   for (const id of ['upload-result', 'upload-status', 'upload-error', 'upload-login']) elements.get(id).hidden = true;
   const timers = new Map(); let sequence = 0, token = 'access-after-refresh', identityChecks = 0;
@@ -59,6 +60,12 @@ function page(fetcher, { previewOnly = false, currentUser } = {}) {
     clearToken: () => { token = null; },
     async select(...files) { elements.get('file-input').files = files; await elements.get('file-input').emit('change'); },
     submit: () => elements.get('upload-form').emit('submit'),
+    async chooseHeader(hasHeader) {
+      elements.get('upload-header-yes').checked = hasHeader;
+      elements.get('upload-header-no').checked = !hasHeader;
+      await elements.get(hasHeader ? 'upload-header-yes' : 'upload-header-no').emit('change');
+    },
+    confirmHeader: () => elements.get('confirm-upload-header').emit('click'),
     drop: files => elements.get('dropzone').emit('drop', { dataTransfer: { files } }),
     close: () => elements.get('upload-dialog').emit('close'),
     expire: () => { for (const fn of [...timers.values()]) fn(); } };
@@ -179,4 +186,92 @@ test('truncation and an empty preview are shown without claiming valid headers o
   assert.equal(empty.get('upload-preview-scroll').hidden, true);
   assert.equal(empty.get('upload-empty-preview').hidden, false);
   assert.equal(empty.get('upload-result').hidden, false);
+});
+
+test('header choice is explicit, applies only on confirmation, and can restore the first data record', async () => {
+  let calls = 0;
+  const data = result();
+  const originalRows = JSON.stringify(data.preview_rows);
+  const ui = page(async () => { calls++; return response(201, data); });
+  await ui.select(csv()); await ui.submit();
+  assert.equal(ui.get('upload-header-options').disabled, false);
+  assert.equal(ui.get('upload-header-yes').checked, false);
+  assert.equal(ui.get('upload-header-no').checked, false);
+  assert.equal(ui.get('confirm-upload-header').disabled, true);
+  await ui.confirmHeader();
+  assert.equal(ui.get('upload-preview-body').children.length, 2);
+  await ui.chooseHeader(true);
+  assert.equal(ui.get('confirm-upload-header').disabled, false);
+  assert.equal(ui.get('upload-preview-head').children[0].children[1].textContent, '第1列');
+  await ui.confirmHeader();
+  assert.equal(ui.get('upload-preview-head').children[0].children[1].textContent, '学号');
+  assert.equal(ui.get('upload-preview-body').children.length, 1);
+  assert.equal(ui.get('upload-preview-body').children[0].children[1].textContent, '001');
+  assert.equal(ui.get('confirm-upload-header').disabled, true);
+  assert(ui.get('upload-header-status').textContent.includes('仅本次预览'));
+  await ui.chooseHeader(false);
+  assert.equal(ui.get('upload-preview-body').children.length, 1);
+  await ui.confirmHeader();
+  assert.equal(ui.get('upload-preview-head').children[0].children[1].textContent, '第1列');
+  assert.equal(ui.get('upload-preview-body').children.length, 2);
+  assert.equal(ui.get('upload-preview-body').children[0].children[1].textContent, '学号');
+  assert.equal(JSON.stringify(data.preview_rows), originalRows);
+  assert.equal(calls, 1); // The local preview choice must not upload or pretend to save a header setting.
+});
+
+test('a new file or a new upload clears the previous header confirmation', async () => {
+  const ui = page(async () => response(201, result()));
+  await ui.select(csv()); await ui.submit();
+  await ui.chooseHeader(true); await ui.confirmHeader();
+  await ui.select(csv('other.csv'));
+  assert.equal(ui.get('upload-result').hidden, true);
+  assert.equal(ui.get('upload-header-yes').checked, false);
+  assert.equal(ui.get('upload-header-no').checked, false);
+  assert.equal(ui.get('confirm-upload-header').disabled, true);
+  await ui.submit();
+  assert.equal(ui.get('upload-preview-body').children.length, 2);
+  await ui.chooseHeader(true); await ui.confirmHeader();
+  await ui.submit();
+  assert.equal(ui.get('upload-header-yes').checked, false);
+  assert.equal(ui.get('upload-preview-head').children[0].children[1].textContent, '第1列');
+  assert.equal(ui.get('upload-preview-body').children.length, 2);
+});
+
+test('empty previews cannot confirm headers and a header-only preview shows the empty-data message', async () => {
+  const empty = page(async () => response(201, result({ preview_rows: [] })));
+  await empty.select(csv()); await empty.submit();
+  assert.equal(empty.get('upload-header-options').disabled, true);
+  assert.equal(empty.get('confirm-upload-header').disabled, true);
+  await empty.confirmHeader();
+  assert(empty.get('upload-header-status').textContent.includes('没有可预览'));
+  const headerOnly = page(async () => response(201, result({ preview_rows: [['学号', '姓名']] })));
+  await headerOnly.select(csv()); await headerOnly.submit();
+  await headerOnly.chooseHeader(true); await headerOnly.confirmHeader();
+  assert.equal(headerOnly.get('upload-preview-body').children.length, 0);
+  assert.equal(headerOnly.get('upload-empty-preview').hidden, false);
+  assert(headerOnly.get('upload-empty-preview').textContent.includes('只有表头'));
+});
+
+test('header labels are plain text and missing names remain visible as preview hints', async () => {
+  const malicious = '<img src=x onerror=alert(1)>';
+  const ui = page(async () => response(201, result({
+    preview_rows: [[malicious, ' '], ['001', 'Alice', 'extra']], preview_truncated: true,
+  })));
+  await ui.select(csv()); await ui.submit();
+  await ui.chooseHeader(true); await ui.confirmHeader();
+  const headings = ui.get('upload-preview-head').children[0].children;
+  assert.equal(headings[1].textContent, malicious);
+  assert(headings[2].textContent.includes('空列名'));
+  assert(headings[3].textContent.includes('首条记录无第3列'));
+  assert.equal(ui.get('upload-truncated').hidden, false);
+});
+
+test('a blank first record supports data preview without inventing a header', async () => {
+  const ui = page(async () => response(201, result({ preview_rows: [[], ['001', 'Alice']] })));
+  await ui.select(csv()); await ui.submit();
+  assert.equal(ui.get('upload-header-yes').disabled, true);
+  assert.equal(ui.get('upload-header-options').disabled, false);
+  await ui.chooseHeader(false); await ui.confirmHeader();
+  assert.equal(ui.get('upload-preview-body').children.length, 2);
+  assert.equal(ui.get('upload-preview-head').children[0].children[1].textContent, '第1列');
 });

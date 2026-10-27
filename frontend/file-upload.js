@@ -6,6 +6,9 @@
   const previewOnly = new URLSearchParams(window.location.search).get("preview") === "1";
   const form = $("upload-form"), dialog = $("upload-dialog"), input = $("file-input");
   let selectedFile = null, busy = false, requestVersion = 0, activeController = null;
+  let uploadedResult = null, confirmedHasHeader = null;
+  const headerOptions = $("upload-header-options"), headerYes = $("upload-header-yes");
+  const headerNo = $("upload-header-no"), confirmHeader = $("confirm-upload-header");
 
   class UploadError extends Error {
     constructor(message, needsLogin = false) { super(message); this.needsLogin = needsLogin; }
@@ -35,6 +38,13 @@
   }
 
   function clearResult() {
+    uploadedResult = null;
+    confirmedHasHeader = null;
+    headerYes.checked = false;
+    headerNo.checked = false;
+    headerOptions.disabled = true;
+    confirmHeader.disabled = true;
+    $("upload-header-status").textContent = "请选择是否包含表头。";
     $("upload-result").hidden = true;
     $("upload-preview-head").replaceChildren();
     $("upload-preview-body").replaceChildren();
@@ -65,14 +75,22 @@
   }
 
   function renderResult(data) {
-    const rows = data.preview_rows;
-    const columns = Math.max(0, ...rows.map(row => row.length));
+    // Always derive the view from the original response; changing the choice must never lose a row.
+    const hasHeader = confirmedHasHeader === true;
+    const rows = hasHeader ? data.preview_rows.slice(1) : data.preview_rows;
+    const columns = Math.max(0, ...data.preview_rows.map(row => row.length));
     $("upload-result-meta").textContent = `${data.filename || selectedFile.name} · ${formatSize(data.size_bytes)} · ${rows.length} 条预览记录 · 文件编号 ${data.file_id}`;
+    $("upload-preview-note").textContent = confirmedHasHeader === null
+      ? "以下为原始记录，尚未选择是否包含表头。"
+      : hasHeader ? "首条记录用于列名，下方展示其余预览记录。"
+        : "文件按无表头预览，首条记录保留为数据，使用第1列、第2列等展示标题。";
     $("upload-preview-head").replaceChildren();
     $("upload-preview-body").replaceChildren();
     $("upload-preview-scroll").hidden = columns === 0;
-    $("upload-empty-preview").hidden = columns !== 0;
-    $("upload-empty-preview").textContent = rows.length
+    $("upload-empty-preview").hidden = columns !== 0 && rows.length !== 0;
+    $("upload-empty-preview").textContent = hasHeader && rows.length === 0
+      ? "当前预览中只有表头，没有可展示的数据记录。"
+      : rows.length
       ? "预览中只有空记录，没有可展示的字段；是否存在有效数据需后续确认。"
       : "文件中没有可预览的 CSV 记录；检查通过不代表存在有效数据。";
     $("upload-truncated").hidden = !data.preview_truncated;
@@ -81,7 +99,11 @@
       for (let column = 0; column <= columns; column++) {
         const cell = document.createElement("th");
         cell.scope = "col";
-        cell.textContent = column === 0 ? "记录" : `第${column}列`;
+        const name = hasHeader ? data.preview_rows[0][column - 1] : undefined;
+        cell.textContent = column === 0 ? "记录"
+          : !hasHeader ? `第${column}列`
+            : name === undefined ? `（首条记录无第${column}列）`
+              : name.trim() === "" ? `（第${column}列为空列名）` : name;
         heading.appendChild(cell);
       }
       $("upload-preview-head").appendChild(heading);
@@ -100,6 +122,25 @@
     }
     $("upload-result").hidden = false;
   }
+
+  function updateHeaderChoice() {
+    const choice = headerYes.checked && !headerYes.disabled ? true : headerNo.checked ? false : null;
+    confirmHeader.disabled = !uploadedResult || headerOptions.disabled || choice === null || choice === confirmedHasHeader;
+    $("upload-header-status").textContent = !uploadedResult || !uploadedResult.preview_rows.length
+      ? "没有可预览的记录，暂时无法选择表头。"
+      : choice === null ? (headerYes.disabled ? "首条记录没有字段，可选择按无表头预览。" : "请选择是否包含表头。")
+        : choice === confirmedHasHeader ? `已应用：${choice ? "第一条记录作为列名" : "全部记录作为数据"}（仅本次预览）。`
+          : "已选择，请点击确认应用到预览。";
+  }
+
+  headerYes.addEventListener("change", updateHeaderChoice);
+  headerNo.addEventListener("change", updateHeaderChoice);
+  confirmHeader.addEventListener("click", () => {
+    if (confirmHeader.disabled || !uploadedResult) return;
+    confirmedHasHeader = headerYes.checked;
+    renderResult(uploadedResult);
+    updateHeaderChoice();
+  });
 
   function cancelPending() {
     requestVersion++;
@@ -148,7 +189,11 @@
       if (!validResult(data) || data.owner_id !== user.id) {
         throw new UploadError("暂时无法确认上传结果，请确认登录账号后手动重试。");
       }
+      uploadedResult = data;
+      headerOptions.disabled = data.preview_rows.length === 0;
+      headerYes.disabled = !data.preview_rows[0]?.length;
       renderResult(data);
+      updateHeaderChoice();
       setStatus("文件及信息已保存，尚未创建处理任务。");
     } catch (error) {
       if (version !== requestVersion) return;
