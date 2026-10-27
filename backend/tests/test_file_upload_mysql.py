@@ -82,12 +82,43 @@ class MySQLFileUploadTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(row["original_filename"], "same.csv")
             self.assertEqual(row["size_bytes"], len(content))
             self.assertIsNotNone(row["created_at"])
+            self.assertIsNone(row["has_header"])
+            self.assertIsNone(row["columns"])
             self.assertEqual((self.root / row["storage_key"]).read_bytes(), content)
         for _, body in replies:
             self.assertTrue(body["persisted"])
             self.assertNotIn("storage_key", body)
             self.assertEqual(body["preview_rows"][1][0], "001")
         self.assertEqual(self.engine.pool.checkedout(), 0)
+
+    async def test_header_configuration_fields_round_trip_without_changing_original_file(self):
+        content = "学号,姓名\n001,张三\n".encode("utf-8")
+        status, response = await self.upload(content)
+        self.assertEqual(status, 201)
+        before = self.stored_rows()[0]
+        configurations = (
+            (True, [{"index": 0, "name": "学号"}, {"index": 1, "name": "姓名"}]),
+            (False, [{"index": 0, "name": "column_1"}, {"index": 1, "name": "column_2"}]),
+            (None, None),
+        )
+        for has_header, columns in configurations:
+            with self.subTest(has_header=has_header):
+                # 只验证模型和数据库的存储能力；确认接口和解析业务尚未接入。
+                with self.app.state.session_factory.begin() as session:
+                    model = session.get(UploadedFileModel, response["file_id"])
+                    model.has_header = has_header
+                    model.columns = columns
+                row = self.stored_rows()[0]
+                self.assertIs(row["has_header"], has_header)
+                self.assertEqual(row["columns"], columns)
+                for key in ("id", "owner_id", "original_filename", "storage_key", "size_bytes", "created_at"):
+                    self.assertEqual(row[key], before[key])
+                self.assertEqual((self.root / row["storage_key"]).read_bytes(), content)
+        with self.engine.connect() as connection:
+            sql_null = connection.execute(select(UploadedFileModel.id).where(
+                UploadedFileModel.id == response["file_id"], UploadedFileModel.columns.is_(None),
+            )).scalar_one()
+        self.assertEqual(sql_null, response["file_id"])
 
     async def test_invalid_file_creates_neither_record_nor_saved_file(self):
         self.assertEqual((await self.upload(b""))[0], 422)

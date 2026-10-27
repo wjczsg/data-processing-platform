@@ -79,7 +79,7 @@ ORM 中的时间使用 UTC，MySQL 以不带时区的 `DATETIME(6)` 保存。
 时间默认值及 `updated_at` 更新函数由 SQLAlchemy 写入时执行，直接使用 SQL 写入时需要显式提供或维护时间。
 业务层 `User` 是只读数据结构，尚未保存时 ID 和时间为空，密码哈希不包含在默认 repr 中；不能直接把包含哈希的对象作为接口响应。
 
-本地数据库 `data_processing_platform` 已应用到迁移 `0003`。`users` 保持原结构和数据，新增 `auth_sessions` 和 `auth_refresh_tokens` 保存会话及续期凭据摘要/轮换历史。
+本地数据库 `data_processing_platform` 已应用到迁移 `0004`。`users` 保持原结构和数据，新增 `auth_sessions` 和 `auth_refresh_tokens` 保存会话及续期凭据摘要/轮换历史。
 
 ## 用户数据访问
 
@@ -211,6 +211,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 - 首个版本 `0001_create_users_table.py` 的 `upgrade()` 创建用户表，`downgrade()` 删除该表及其数据。
 - `0002_create_auth_sessions.py` 仅新增登录会话及续期凭据表和索引，不修改用户表；降级会删除登录会话记录。
 - `0003_create_uploaded_files_table.py` 新增 `uploaded_files`，仅保存文件信息及用户归属；原 CSV 在本地存储目录，已有用户和会话不变。
+- `0004_add_file_header_configuration.py` 在文件表增加可空的 `has_header`（布尔）和 `columns`（JSON），既有记录保持未确认，原文件信息不变。降级会删除这两个字段及其设置值。
 - 生成迁移时不自动创建版本跟踪表；真正执行升级时才创建并更新 `alembic_version`。
 
 在项目根目录查看已有版本：
@@ -225,7 +226,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 .\.venv\Scripts\python.exe -m alembic upgrade head --sql
 ```
 
-应用迁移可执行 `.\.venv\Scripts\python.exe -m alembic upgrade head`。本地已执行到 `0003`，并通过 `alembic check` 确认数据库结构与当前模型一致。
+应用迁移可执行 `.\.venv\Scripts\python.exe -m alembic upgrade head`。本地已执行到 `0004`，并通过 `alembic check` 确认数据库结构与当前模型一致。
 首次应用会创建 `users` 和 `alembic_version`，不会自动插入用户。
 MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前需检查是否删除表或字段。
 自动生成的脚本必须审查，字段改名、数据转换和已有 CHECK 约束变更尤其需要手动核对。
@@ -259,3 +260,6 @@ MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前�
 - `api/dependencies.py`：组装实现；同一次请求内认证与文件保存复用数据库 Session，请求结束关闭，异常回滚。
 
 默认 `UPLOAD_STORAGE_DIR=storage`，相对路径以项目根目录为准。原文件位于 `storage/uploads/{owner_id}/{file_id}.csv`；数据库保存原名、位置、大小、所属用户及时间，不存文件内容。同名重复上传生成不同文件。文件与 MySQL 的失败处理边界见主 README，提交结果不确定时保留文件供核对；尚无自动残留清理、列表、下载、表头确认或任务接口。
+
+
+文件表已预留表头设置：`has_header=None` 表示未确认，`True`/`False` 分别表示有/无表头；`columns` 用 JSON 保存按顺序排列的列信息，例如 `[{"index": 0, "name": "学号"}]`，序号从 0 开始。两列允许 SQL `NULL`，`JSON(none_as_null=True)` 使 Python `None` 对应 SQL `NULL`。当前上传流程不写入表头设置，前端选择仍只影响预览，确认接口、列名检查和配置写入业务尚未接入。

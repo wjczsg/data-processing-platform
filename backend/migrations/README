@@ -8,4 +8,6 @@ versions/：已生成、需要审查并提交 Git 的版本脚本。
 0002 新增 auth_sessions、auth_refresh_tokens 及索引，原有用户数据不变。
 命令、配置及默认值说明见 backend/README.md。
 
-当前本地版本为 0003，新增 uploaded_files 文件信息表，外键关联 users，原文件保存在本地目录。既有用户和会话数据保留。
+0003 新增 uploaded_files 文件信息表，外键关联 users，原文件保存在本地目录。既有用户和会话数据保留。
+
+当前本地版本为 0004，为 uploaded_files 增加 has_header（可空布尔）及 columns（可空 JSON）。既有记录的新字段为 SQL NULL，表示未确认；原文件信息保留。降级删除这两列及其设置值，保留文件记录。
