@@ -1,4 +1,4 @@
-/* Presentation only: fixed samples, navigation, filters and dialogs. */
+/* Fixed task samples, navigation, filters and shared dialogs. Uploads live in file-upload.js. */
 (function () {
   "use strict";
   const $ = id => document.getElementById(id);
@@ -66,10 +66,6 @@
     document.querySelectorAll("[data-view]").forEach(b => b.classList.toggle("active", b.dataset.view === view));
     history.replaceState(null, "", `#${view}`);
   }
-  function showFileName(file) {
-    $("drop-title").textContent = file ? file.name : "点击选择，或将文件拖到这里";
-    $("drop-subtitle").textContent = file ? `${size(file.size)} · 仅预览文件名称，尚未上传` : "CSV 格式 · 文件上传待接入";
-  }
   document.addEventListener("click", event => { const b = event.target.closest("[data-detail]"); if (b) openDetail(b.dataset.detail); });
   document.querySelectorAll("[data-close]").forEach(b => b.addEventListener("click", () => $(b.dataset.close).close()));
   document.querySelectorAll("dialog").forEach(d => d.addEventListener("click", event => { if (event.target !== d) return; const r = d.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) d.close(); }));
@@ -79,13 +75,6 @@
   $("search-input").addEventListener("input", () => { page = 1; renderTasks(); });
   $("prev-page").addEventListener("click", () => { page--; renderTasks(); }); $("next-page").addEventListener("click", () => { page++; renderTasks(); });
   $("help-button").addEventListener("click", () => $("help-dialog").showModal());
-  $("new-task-button").addEventListener("click", () => { $("upload-form").reset(); showFileName(null); $("upload-dialog").showModal(); });
-  $("upload-form").addEventListener("submit", event => event.preventDefault());
-  $("file-input").addEventListener("change", event => showFileName(event.target.files[0]));
-  $("dropzone").addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); $("file-input").click(); } });
-  ["dragenter", "dragover"].forEach(name => $("dropzone").addEventListener(name, event => { event.preventDefault(); $("dropzone").classList.add("dragging"); }));
-  ["dragleave", "drop"].forEach(name => $("dropzone").addEventListener(name, event => { event.preventDefault(); $("dropzone").classList.remove("dragging"); }));
-  $("dropzone").addEventListener("drop", event => showFileName(event.dataTransfer.files[0]));
   $("rule-list").innerHTML = [["订单号", "拟定规则：订单号必填并检查重复。具体实现待后端开发。", "order_id"], ["商品名称", "拟定规则：商品名称用于分组统计。", "product"], ["订单金额", "拟定规则：检查金额格式，具体业务限制后续确定。", "amount"], ["订单日期", "拟定规则：使用 YYYY-MM-DD，并检查日期有效性。", "order_date"]].map(([title, text, field], i) => `<div class="rule-row"><span class="rule-index">0${i + 1}</span><div><strong>${title}</strong><p>${text}</p></div><code>${field}</code></div>`).join("");
   renderStats(); renderTasks(); renderFiles();
   switchView(["tasks", "files", "rules"].includes(location.hash.slice(1)) ? location.hash.slice(1) : "tasks");

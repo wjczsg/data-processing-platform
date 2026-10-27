@@ -12,6 +12,7 @@
   <script defer src="workbench-auth.js"></script>
   <script defer src="demo-data.js"></script>
   <script defer src="app.js"></script>
+  <script defer src="file-upload.js"></script>
 </head>
 <body data-auth-state="pending">
   <section id="auth-loading" class="auth-loading" role="status"><p id="auth-loading-text">正在验证登录状态…</p><button id="auth-retry" class="button" hidden>重试</button><a href="auth.html">返回登录</a></section>
@@ -41,7 +42,7 @@
       <button class="nav-item" data-view="files"><svg><use href="#i-folder"/></svg>数据文件</button>
       <button class="nav-item" data-view="rules"><svg><use href="#i-rules"/></svg>处理规则</button>
     </nav>
-    <div class="sidebar-note"><span class="small-dot"></span>页面预览工作区<p>先确认页面，再逐步实现功能。</p></div>
+    <div class="sidebar-note"><span class="small-dot"></span>开发工作区<p>上传可检查并预览，任务列表为示例。</p></div>
     <div class="sidebar-bottom"><span class="avatar" id="current-avatar">陈</span><div><strong id="current-username">陈同学</strong><span id="current-role">演示成员</span></div><span class="version">v0.1</span></div>
   </aside>
 
@@ -49,7 +50,7 @@
     <header class="topbar"><div class="breadcrumb">工作区 <svg><use href="#i-arrow"/></svg><span id="breadcrumb-current">导入任务</span></div><div class="topbar-right"><a class="plain-button" id="auth-entry" href="auth.html">登录 / 注册</a><button class="plain-button" id="logout-button" type="button" hidden>退出登录</button><span class="prototype-badge" id="identity-badge">前端原型</span><button class="plain-button" id="help-button"><svg><use href="#i-info"/></svg>使用说明</button></div></header>
     <div id="session-notice" class="session-notice" role="status" hidden><span id="session-notice-text"></span><button id="session-retry" class="plain-button" type="button">立即重试</button><a id="session-relogin" href="auth.html" hidden>重新登录</a></div>
     <main>
-      <section class="page-heading"><div><div class="eyebrow">数据工作台</div><h1 id="page-title">导入任务</h1><p id="page-description">管理文件导入，跟踪处理进度，查看数据质量。</p></div><div class="heading-actions"><button class="button" id="template-button" disabled title="待接入后端"><svg><use href="#i-download"/></svg>下载模板</button><button class="button primary" id="new-task-button"><svg><use href="#i-plus"/></svg>新建导入</button></div></section>
+      <section class="page-heading"><div><div class="eyebrow">数据工作台</div><h1 id="page-title">导入任务</h1><p id="page-description">管理文件导入，跟踪处理进度，查看数据质量。</p></div><div class="heading-actions"><button class="button" id="template-button" disabled title="待接入后端"><svg><use href="#i-download"/></svg>下载模板</button><button class="button primary" id="new-task-button"><svg><use href="#i-plus"/></svg>上传文件</button></div></section>
 
       <section class="stats" aria-label="任务概览" id="stats"></section>
 
@@ -62,21 +63,36 @@
 
       <section id="file-view" class="panel" hidden><div class="section-bar"><h2>源文件</h2><span>每个文件关联一条导入任务</span></div><div class="table-scroll"><table><thead><tr><th>文件名称</th><th>文件大小</th><th>来源</th><th>关联任务</th><th>提交时间</th><th>操作</th></tr></thead><tbody id="file-table-body"></tbody></table></div><div class="panel-footnote">以下文件均为静态示例，用于确认文件列表布局。</div></section>
 
-      <section id="rule-view" class="panel rules-panel" hidden><div class="section-bar"><h2>订单校验规则</h2><span class="tag neutral">规则版本 1.0</span></div><p class="rule-intro">以下为拟定规则的展示示例，尚未实现校验逻辑。</p><div id="rule-list"></div><div class="rule-format"><strong>文件格式</strong><p>拟支持 CSV 文件，第一行为列名。具体限制在实现后端时确定。</p><code>order_id,product,amount,order_date</code></div></section>
+      <section id="rule-view" class="panel rules-panel" hidden><div class="section-bar"><h2>订单规则 · 展示示例</h2><span class="tag neutral">规则待接入</span></div><p class="rule-intro">以下仅为订单场景的规则示例，上传文件不要求包含这些列。通用表头确认和逐列规则尚未实现。</p><div id="rule-list"></div><div class="rule-format"><strong>当前上传能力</strong><p>支持 CSV 基础检查与原始记录预览，表头由用户确认的流程待实现。</p></div></section>
 
-      <footer class="page-footer"><span><span class="small-dot"></span>页面原型 · 静态示例</span><span>上传、处理、重试和下载功能待接入后端。</span></footer>
+      <footer class="page-footer"><span><span class="small-dot"></span>上传检查已接入 · 任务列表为示例</span><span>文件正式存储、后台任务和报告下载待实现。</span></footer>
     </main>
   </div>
 
-  <dialog id="upload-dialog" class="modal upload-modal" aria-labelledby="upload-title"><form id="upload-form">
-    <div class="modal-heading"><div><h2 id="upload-title">新建导入任务</h2><p>上传订单文件，校验数据并生成处理报告。</p></div><button type="button" class="icon-button" data-close="upload-dialog" aria-label="关闭上传窗口"><svg><use href="#i-close"/></svg></button></div>
-    <div class="modal-body"><div class="field-label">订单文件 <span>CSV</span></div><label class="dropzone" id="dropzone" tabindex="0"><input type="file" id="file-input" accept=".csv,text/csv"><span class="upload-icon"><svg><use href="#i-upload"/></svg></span><strong id="drop-title">点击选择，或将文件拖到这里</strong><span id="drop-subtitle">CSV 格式 · 文件上传待接入</span></label><div class="upload-tools"><span>需要包含订单号、商品、金额和日期。</span><button type="button" class="text-button" id="upload-template" disabled title="待接入后端">下载模板</button></div><label class="field-label" for="task-note">任务备注 <span>选填</span></label><input class="text-input" id="task-note" maxlength="120" placeholder="例如：十月华东门店订单"><div class="notice"><svg><use href="#i-info"/></svg><p>当前只预览上传表单。选择文件仅显示名称和大小，不读取内容，也不会创建任务。</p></div><p id="upload-error" class="form-error" role="alert" hidden></p></div>
-    <div class="modal-footer"><button type="button" class="button" data-close="upload-dialog">取消</button><button type="submit" class="button primary" id="submit-upload" disabled>创建任务 · 待接入</button></div>
+  <dialog id="upload-dialog" class="modal upload-modal" aria-labelledby="upload-title"><form id="upload-form" method="post" enctype="multipart/form-data" aria-busy="false">
+    <div class="modal-heading"><div><h2 id="upload-title">上传并预览</h2><p>检查 CSV 文件，查看前 5 条原始记录。</p></div><button type="button" class="icon-button" data-close="upload-dialog" aria-label="关闭上传窗口"><svg><use href="#i-close"/></svg></button></div>
+    <div class="modal-body">
+      <div class="field-label">CSV 文件</div>
+      <label class="dropzone" id="dropzone" tabindex="0"><input type="file" id="file-input" name="file" accept=".csv,text/csv"><span class="upload-icon"><svg><use href="#i-upload"/></svg></span><strong id="drop-title">点击选择，或将文件拖到这里</strong><span id="drop-subtitle">每次一个 CSV · UTF-8 编码 · 默认上限 50 MiB</span></label>
+      <div class="notice"><svg><use href="#i-info"/></svg><p>文件仅用于本次检查和预览，尚未正式保存，也不会创建处理任务。刷新页面后预览不保留。</p></div>
+      <p id="upload-status" class="upload-status" role="status" aria-live="polite" hidden></p>
+      <p id="upload-error" class="form-error" role="alert" hidden></p>
+      <a id="upload-login" class="upload-login" href="auth.html" hidden>前往登录</a>
+      <section id="upload-result" class="upload-result" aria-label="文件检查结果与内容预览" hidden>
+        <div class="upload-result-heading"><h3>基础检查通过</h3><span class="tag neutral">文件尚未保存</span></div>
+        <p id="upload-result-meta" class="small-note"></p>
+        <p class="small-note">以下包含文件的首条记录，尚未确认哪条是表头；表头和逐列数据规则待后续确认。</p>
+        <div id="upload-preview-scroll" class="upload-preview-scroll" tabindex="0" role="region" aria-label="CSV 前几条记录"><table class="upload-preview-table"><thead id="upload-preview-head"></thead><tbody id="upload-preview-body"></tbody></table></div>
+        <p id="upload-empty-preview" class="small-note" hidden></p>
+        <p id="upload-truncated" class="small-note" hidden>预览已截断：最多展示前 5 条记录、50 列，每个单元格 200 字符。后端仍检查整个文件的 CSV 语法。</p>
+      </section>
+    </div>
+    <div class="modal-footer"><button type="button" class="button" data-close="upload-dialog">关闭</button><button type="submit" class="button primary" id="submit-upload" disabled>上传并预览</button></div>
   </form></dialog>
 
   <dialog id="detail-dialog" class="detail-drawer" aria-labelledby="detail-title"><div class="drawer-head"><span>任务详情</span><button class="icon-button" data-close="detail-dialog" aria-label="关闭任务详情"><svg><use href="#i-close"/></svg></button></div><div id="detail-content"></div></dialog>
 
-  <dialog id="help-dialog" class="modal help-modal" aria-labelledby="help-title"><div class="modal-heading"><div><h2 id="help-title">使用说明</h2><p>当前只确认页面布局与信息展示。</p></div><button class="icon-button" data-close="help-dialog" aria-label="关闭说明"><svg><use href="#i-close"/></svg></button></div><div class="modal-body help-content"><ol><li>切换导入任务、数据文件和处理规则页面。</li><li>使用搜索和状态筛选查看固定示例。</li><li>打开任务详情，查看各类状态和报告区域的布局。</li><li>打开新建导入表单，预览文件选择和备注输入。</li></ol><p>任务、进度、结果和成员均为静态占位数据，不会自动变化。</p><p>当前没有文件内容读取、数据校验、任务执行或报告生成。上传提交、重试、下载和导出将在后端实现后逐步接入。</p></div><div class="modal-footer"><button class="button primary" data-close="help-dialog">知道了</button></div></dialog>
+  <dialog id="help-dialog" class="modal help-modal" aria-labelledby="help-title"><div class="modal-heading"><div><h2 id="help-title">使用说明</h2><p>上传检查可用，任务和文件列表仍为静态示例。</p></div><button class="icon-button" data-close="help-dialog" aria-label="关闭说明"><svg><use href="#i-close"/></svg></button></div><div class="modal-body help-content"><ol><li>登录后点击“上传文件”，选择或拖入一个 CSV。</li><li>点击“上传并预览”，由后端检查格式、编码及大小，并返回前 5 条记录。</li><li>错误提示会保留所选文件，修正问题后可以手动重试。</li><li>任务列表、进度、规则和报告区域目前用于布局展示。</li></ol><p>上传检查通过不代表订单或其他业务数据正确；目前没有表头确认、正式文件存储、后台任务或报告生成。</p></div><div class="modal-footer"><button class="button primary" data-close="help-dialog">知道了</button></div></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

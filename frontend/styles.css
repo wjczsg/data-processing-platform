@@ -16,3 +16,25 @@ body[data-auth-state="pending"] .sidebar,body[data-auth-state="pending"] .shell{
 .auth-loading{min-height:100dvh;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:18px;padding:24px;color:var(--muted)}.auth-loading a{color:var(--green)}
 
 .session-notice{margin:16px clamp(18px,4vw,40px) 0;padding:12px 16px;border:1px solid #eadfc5;border-radius:4px;background:#faf6ec;color:#806b3e;line-height:1.8;display:flex;gap:18px;align-items:center}.session-notice span{flex:1}.session-notice a{white-space:nowrap;text-decoration:underline}
+
+/* Live upload uses the existing workbench palette; preview content is plain text. */
+.upload-modal{width:760px}
+.upload-modal .modal-body{padding-top:20px}
+.upload-modal .dropzone{min-height:140px;padding:22px 15px}
+.upload-modal .dropzone[aria-disabled="true"]{opacity:.65;cursor:wait}
+.upload-modal button:disabled{opacity:.55;cursor:not-allowed}
+.upload-status{color:var(--green);font-size:12px;line-height:1.8;margin:16px 0 0}
+.upload-login{display:inline-block;margin-top:10px;color:var(--green);text-decoration:underline;font-size:12px}
+.upload-result{border-top:1px solid var(--line);margin-top:22px;padding-top:20px}
+.upload-result-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.upload-result-heading h3{font-size:13px;font-weight:600;margin:0}
+#upload-result-meta{overflow-wrap:anywhere}
+.upload-preview-scroll{overflow:auto;max-height:300px;margin-top:16px;border:1px solid var(--line);border-radius:4px}
+.upload-preview-table{min-width:100%;width:max-content;border-collapse:collapse;white-space:normal}
+.upload-preview-table th,.upload-preview-table td{height:auto;min-width:110px;max-width:280px;padding:10px 12px;font-size:11px;line-height:1.7;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+.upload-preview-table thead th{position:sticky;top:0;background:#f4f7f4;z-index:1;font-weight:500}
+.upload-preview-table tbody th{color:var(--muted);font-weight:400}
+.upload-preview-table th:first-child,.upload-preview-table td:first-child{min-width:50px;padding-left:12px}
+.upload-preview-table td{white-space:pre-wrap;overflow-wrap:anywhere}
+.upload-preview-table tbody tr:last-child th,.upload-preview-table tbody tr:last-child td{border-bottom:0}
+@media(max-width:760px){.upload-modal{max-width:calc(100% - 20px)}.upload-result-heading{align-items:flex-start;flex-direction:column}.upload-preview-table th,.upload-preview-table td{min-width:95px;max-width:210px}}
