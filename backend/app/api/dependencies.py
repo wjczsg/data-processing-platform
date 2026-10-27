@@ -5,25 +5,49 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from backend.app.application.authenticate_user import AuthenticationService
+from sqlalchemy.orm import Session
 
+from backend.app.application.authenticate_user import AuthenticationService
 from backend.app.application.ports.password_hasher import PasswordHasher
 from backend.app.application.ports.auth_sessions import RefreshCredentialCodec
-from backend.app.application.ports.unit_of_work import UserUnitOfWork
+from backend.app.application.ports.unit_of_work import FileUnitOfWork, UserUnitOfWork
+from backend.app.application.ports.file_storage import FileStorage
 from backend.app.application.ports.token_service import InvalidAccessTokenError, TokenService
 from backend.app.application.register_user import RegisterUserService
+from backend.app.application.store_uploaded_file import StoreUploadedFileService
+from backend.app.core.config import Settings, get_settings
 from backend.app.domain.user import User
 from backend.app.infrastructure.db.session import session_scope
-from backend.app.infrastructure.db.unit_of_work import MySQLUserUnitOfWork
+from backend.app.infrastructure.db.unit_of_work import MySQLFileUnitOfWork, MySQLUserUnitOfWork
+from backend.app.infrastructure.files.local_storage import LocalFileStorage
 
 
 bearer = HTTPBearer(auto_error=False)
 
 
-def get_user_unit_of_work(request: Request) -> Iterator[UserUnitOfWork]:
-    # 每个请求独立取得会话，异常回滚，结束时归还连接。
+def get_database_session(request: Request) -> Iterator[Session]:
+    # 一个请求内的身份查询和文件写入复用会话，避免各自占用连接。
     with session_scope(request.app.state.session_factory) as session:
-        yield MySQLUserUnitOfWork(session)
+        yield session
+
+
+def get_user_unit_of_work(session: Annotated[Session, Depends(get_database_session)]) -> UserUnitOfWork:
+    return MySQLUserUnitOfWork(session)
+
+
+def get_file_unit_of_work(session: Annotated[Session, Depends(get_database_session)]) -> FileUnitOfWork:
+    return MySQLFileUnitOfWork(session)
+
+
+def get_file_storage(settings: Annotated[Settings, Depends(get_settings)]) -> FileStorage:
+    return LocalFileStorage(settings.upload_storage_dir)
+
+
+def get_store_uploaded_file_service(
+    unit_of_work: Annotated[FileUnitOfWork, Depends(get_file_unit_of_work)],
+    storage: Annotated[FileStorage, Depends(get_file_storage)],
+) -> StoreUploadedFileService:
+    return StoreUploadedFileService(unit_of_work, storage)
 
 
 def get_password_hasher(request: Request) -> PasswordHasher:

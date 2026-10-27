@@ -1,13 +1,15 @@
-"""验证真实 multipart 请求、公共身份校验及单文件接收，不访问磁盘存储或 MySQL。"""
+"""验证真实 multipart 请求、公共身份校验及单文件接收，使用隔离临时目录和内存仓库，不访问 MySQL。"""
 
 import unittest
 import threading
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 
-from backend.app.api.dependencies import get_authentication_service
+from backend.app.api.dependencies import get_authentication_service, get_file_unit_of_work
 from backend.app.api.exception_handlers import request_validation_exception_handler
 from backend.app.api.files import router
 from backend.app.application.ports.token_service import InvalidAccessTokenError
@@ -16,6 +18,7 @@ from backend.app.domain.user import User
 from backend.app.infrastructure.files.csv_format import validate_csv_format
 from backend.app.infrastructure.files.encoding import Utf8FileValidator
 from backend.tests.asgi_client import request_json
+from backend.tests.test_file_persistence import MemoryFileUnitOfWork
 
 
 class FileUploadTests(unittest.IsolatedAsyncioTestCase):
@@ -27,8 +30,12 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         self.app.include_router(router)
         self.app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
         self.app.dependency_overrides[get_authentication_service] = lambda: self.service
+        self.directory = TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.uow = MemoryFileUnitOfWork()
+        self.app.dependency_overrides[get_file_unit_of_work] = lambda: self.uow
         self.settings = Settings(_env_file=None, mysql_user="test_user", mysql_password="test-only-password",
-                                 upload_max_bytes=50 * 1024 * 1024)
+                                 upload_max_bytes=50 * 1024 * 1024, upload_storage_dir=Path(self.directory.name))
         self.app.dependency_overrides[get_settings] = lambda: self.settings
 
     async def upload(self, files, token="test-access", owner_id=None, *, file_content_type="text/csv"):
@@ -46,14 +53,18 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         return await request_json(self.app, "/api/files", "POST", headers=headers,
             raw_body=b"".join(parts), content_type=f"multipart/form-data; boundary={boundary}")
 
-    async def test_receives_file_with_authenticated_owner_and_reports_no_persistence(self):
+    async def test_receives_file_with_authenticated_owner_and_persists_original_bytes(self):
         content = "order_id,product,amount,order_date\nORD1,键盘,199,2026-10-26\n".encode()
         status, body = await self.upload([("file", "订单.csv", content)], owner_id=999)
-        self.assertEqual(status, 200)
+        self.assertEqual(status, 201)
         self.assertEqual((body["filename"], body["size_bytes"]), ("订单.csv", len(content)))
         self.assertEqual(body["content_type"], "text/csv")
         self.assertEqual(body["owner_id"], 7)
-        self.assertIs(body["persisted"], False)
+        self.assertIs(body["persisted"], True)
+        record = self.uow.records[body["file_id"]]
+        self.assertEqual(record.owner_id, 7)
+        self.assertEqual((Path(self.directory.name) / record.storage_key).read_bytes(), content)
+        self.assertTrue(body["created_at"].endswith("Z"))
         self.assertEqual(body["preview_rows"], [
             ["order_id", "product", "amount", "order_date"], ["ORD1", "键盘", "199", "2026-10-26"],
         ])
@@ -66,6 +77,14 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 401)
         self.service.current_user.assert_not_called()
 
+    async def test_filename_metadata_limit_is_checked_before_persistence(self):
+        accepted = "x" * 251 + ".csv"
+        self.assertEqual((await self.upload([("file", accepted, b"a\n1\n")]))[0], 201)
+        status, _ = await self.upload([("file", "x" * 252 + ".csv", b"a\n1\n")])
+        self.assertEqual(status, 422)
+        self.assertEqual(len(self.uow.records), 1)
+        self.assertEqual(len(list(Path(self.directory.name).rglob("*.csv"))), 1)
+
     async def test_invalid_login_state_is_rejected(self):
         self.service.current_user.side_effect = InvalidAccessTokenError("expired")
         self.assertEqual((await self.upload([("file", "orders.csv", b"data")]))[0], 401)
@@ -75,11 +94,11 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_configured_file_size_limit_allows_boundary_and_rejects_one_extra_byte(self):
         self.settings = self.settings.model_copy(update={"upload_max_bytes": 8})
-        for size, expected_status in ((7, 200), (8, 200), (9, 413)):
+        for size, expected_status in ((7, 201), (8, 201), (9, 413)):
             with self.subTest(size=size):
                 status, body = await self.upload([("file", "orders.csv", b"x" * size)])
                 self.assertEqual(status, expected_status)
-                if status == 200:
+                if status == 201:
                     self.assertEqual(body["size_bytes"], size)
                 else:
                     self.assertEqual(body, {"detail": "文件大小不能超过 8 字节"})
@@ -93,12 +112,14 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
     async def test_zero_byte_file_is_rejected(self):
         status, body = await self.upload([("file", "orders.csv", b"")])
         self.assertEqual((status, body), (422, {"detail": "不能上传空文件"}))
+        self.assertEqual(self.uow.records, {})
+        self.assertEqual(list(Path(self.directory.name).rglob("*.csv")), [])
 
     async def test_nonzero_content_is_not_treated_as_zero_byte_file(self):
         for content in (b"x", b" ", b"\n", b"\xef\xbb\xbf", b"order_id,product,amount,order_date\n"):
             with self.subTest(content=content):
                 status, body = await self.upload([("file", "orders.csv", content)])
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 201)
                 self.assertEqual(body["size_bytes"], len(content))
 
     async def test_utf8_chinese_and_optional_bom_preserve_original_byte_count(self):
@@ -106,21 +127,21 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         for content in (data, b"\xef\xbb\xbf" + data):
             with self.subTest(has_bom=content.startswith(b"\xef\xbb\xbf")):
                 status, body = await self.upload([("file", "orders.csv", content)])
-                self.assertEqual((status, body["size_bytes"]), (200, len(content)))
+                self.assertEqual((status, body["size_bytes"]), (201, len(content)))
 
     async def test_multibyte_characters_split_between_read_chunks_are_accepted(self):
         for character in ("中", "🙂"):
             with self.subTest(character=character):
                 content = b"a" * (1024 * 1024 - 1) + character.encode("utf-8") + b"\n"
                 status, body = await self.upload([("file", "orders.csv", content)])
-                self.assertEqual((status, body["size_bytes"]), (200, len(content)))
+                self.assertEqual((status, body["size_bytes"]), (201, len(content)))
                 self.assertEqual(body["preview_rows"], [["a" * 200]])
                 self.assertTrue(body["preview_truncated"])
 
     async def test_preview_keeps_first_data_record_and_reports_record_limit(self):
         content = b"001,Alice,85\n002,Bob,90\n003,Carol,80\n004,Dan,75\n005,Eve,95\n006,Frank,88\n"
         status, body = await self.upload([("file", "students.csv", content)])
-        self.assertEqual(status, 200)
+        self.assertEqual(status, 201)
         self.assertEqual(body["preview_rows"], [
             ["001", "Alice", "85"], ["002", "Bob", "90"], ["003", "Carol", "80"],
             ["004", "Dan", "75"], ["005", "Eve", "95"],
@@ -148,7 +169,7 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_failed_upload_does_not_leave_decoder_state_for_next_request(self):
         self.assertEqual((await self.upload([("file", "broken.csv", b"\xe4")]))[0], 422)
-        self.assertEqual((await self.upload([("file", "orders.csv", b"order_id\nORD1\n")]))[0], 200)
+        self.assertEqual((await self.upload([("file", "orders.csv", b"order_id\nORD1\n")]))[0], 201)
 
     async def test_csv_quoted_commas_double_quotes_and_multiline_fields_are_accepted(self):
         data = ('order_id,product,amount\r\n'
@@ -158,7 +179,7 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         for content in (data, b"\xef\xbb\xbf" + data):
             with self.subTest(has_bom=content.startswith(b"\xef\xbb\xbf")):
                 status, body = await self.upload([("file", "orders.csv", content)])
-                self.assertEqual((status, body["size_bytes"]), (200, len(content)))
+                self.assertEqual((status, body["size_bytes"]), (201, len(content)))
 
     async def test_csv_syntax_errors_return_422_with_physical_line_location(self):
         for content, line in ((b'a,b\n1,"unfinished\n', 2), (b'a,b\n1,"ok"x\n', 2),
@@ -174,11 +195,11 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         for content in (b"custom\none,two,three\n", b"order_id,amount\nORD1,abc\n",
                         b"order_id;product;amount\nORD1;keyboard;abc\n"):
             with self.subTest(content=content):
-                self.assertEqual((await self.upload([("file", "orders.csv", content)]))[0], 200)
+                self.assertEqual((await self.upload([("file", "orders.csv", content)]))[0], 201)
 
     async def test_csv_parsing_runs_in_worker_and_framework_closes_temporary_file(self):
         request_thread = threading.get_ident()
-        for content, expected_status in ((b"a,b\n1,2\n", 200), (b'a,b\n1,"unfinished', 422)):
+        for content, expected_status in ((b"a,b\n1,2\n", 201), (b'a,b\n1,"unfinished', 422)):
             observed = {}
 
             def validate_in_worker(stream):
@@ -196,7 +217,7 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         for filename in ("orders.csv", "orders.CSV", "orders.CsV"):
             with self.subTest(filename=filename):
                 status, body = await self.upload([("file", filename, b"order_id\nORD1\n")])
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 201)
                 self.assertEqual(body["filename"], filename)
 
     async def test_invalid_or_missing_extensions_are_rejected_despite_csv_content_type(self):
@@ -210,7 +231,7 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(content_type=content_type):
                 status, _ = await self.upload([("file", "orders.csv", b"order_id\nORD1\n")],
                     file_content_type=content_type)
-                self.assertEqual(status, 200)
+                self.assertEqual(status, 201)
 
     async def test_multiple_files_are_rejected_even_with_different_field_names(self):
         for other_field in ("file", "another_file"):

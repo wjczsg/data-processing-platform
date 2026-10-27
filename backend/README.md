@@ -79,7 +79,7 @@ ORM 中的时间使用 UTC，MySQL 以不带时区的 `DATETIME(6)` 保存。
 时间默认值及 `updated_at` 更新函数由 SQLAlchemy 写入时执行，直接使用 SQL 写入时需要显式提供或维护时间。
 业务层 `User` 是只读数据结构，尚未保存时 ID 和时间为空，密码哈希不包含在默认 repr 中；不能直接把包含哈希的对象作为接口响应。
 
-本地数据库 `data_processing_platform` 已应用到迁移 `0002`。`users` 保持原结构和数据，新增 `auth_sessions` 和 `auth_refresh_tokens` 保存会话及续期凭据摘要/轮换历史。
+本地数据库 `data_processing_platform` 已应用到迁移 `0003`。`users` 保持原结构和数据，新增 `auth_sessions` 和 `auth_refresh_tokens` 保存会话及续期凭据摘要/轮换历史。
 
 ## 用户数据访问
 
@@ -210,6 +210,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 - `backend/migrations/env.py` 在线时读取项目配置并复用数据库引擎，通过 `Base.metadata` 发现模型。
 - 首个版本 `0001_create_users_table.py` 的 `upgrade()` 创建用户表，`downgrade()` 删除该表及其数据。
 - `0002_create_auth_sessions.py` 仅新增登录会话及续期凭据表和索引，不修改用户表；降级会删除登录会话记录。
+- `0003_create_uploaded_files_table.py` 新增 `uploaded_files`，仅保存文件信息及用户归属；原 CSV 在本地存储目录，已有用户和会话不变。
 - 生成迁移时不自动创建版本跟踪表；真正执行升级时才创建并更新 `alembic_version`。
 
 在项目根目录查看已有版本：
@@ -224,7 +225,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 .\.venv\Scripts\python.exe -m alembic upgrade head --sql
 ```
 
-应用迁移可执行 `.\.venv\Scripts\python.exe -m alembic upgrade head`。本地已执行到 `0002`，并通过 `alembic check` 确认数据库结构与当前模型一致。
+应用迁移可执行 `.\.venv\Scripts\python.exe -m alembic upgrade head`。本地已执行到 `0003`，并通过 `alembic check` 确认数据库结构与当前模型一致。
 首次应用会创建 `users` 和 `alembic_version`，不会自动插入用户。
 MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前需检查是否删除表或字段。
 自动生成的脚本必须审查，字段改名、数据转换和已有 CHECK 约束变更尤其需要手动核对。
@@ -245,3 +246,16 @@ MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前�
 - 不读取请求体、查询参数、Cookie、Authorization 或文件内容到请求日志。业务代码也不应自行记录密码、令牌等敏感值。
 - 使用上下文变量关联并发请求，请求结束后清理上下文。
 - 暂不写日志文件。修改 `LOG_LEVEL` 后重启服务。
+
+
+## 文件上传和保存
+
+`POST /api/files` 复用登录认证及现有单文件、大小、非空、UTF-8、CSV 语法检查。通过后返回 `201`，包含 `file_id`、UTC `created_at`、`persisted=true` 和前 5 条记录预览。
+
+- `application/store_uploaded_file.py`：组织保存原文件、插入记录、提交事务及失败清理。
+- `application/ports/file_storage.py`、`file_repository.py` 和 `FileUnitOfWork`：定义存储、文件仓库和提交接口。
+- `infrastructure/files/local_storage.py`：保存原始字节，使用独占创建防覆盖，限制在配置的目录内。
+- `infrastructure/db/models/uploaded_file.py`：映射 `uploaded_files`；仓库执行插入和 flush，业务服务决定 commit。
+- `api/dependencies.py`：组装实现；同一次请求内认证与文件保存复用数据库 Session，请求结束关闭，异常回滚。
+
+默认 `UPLOAD_STORAGE_DIR=storage`，相对路径以项目根目录为准。原文件位于 `storage/uploads/{owner_id}/{file_id}.csv`；数据库保存原名、位置、大小、所属用户及时间，不存文件内容。同名重复上传生成不同文件。文件与 MySQL 的失败处理边界见主 README，提交结果不确定时保留文件供核对；尚无自动残留清理、列表、下载、表头确认或任务接口。

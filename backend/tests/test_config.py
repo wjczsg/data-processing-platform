@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from pydantic import SecretStr, ValidationError
 
-from backend.app.core.config import Settings
+from backend.app.core.config import PROJECT_ROOT, Settings
 
 
 class MySQLConfigTests(unittest.TestCase):
@@ -42,6 +42,11 @@ class MySQLConfigTests(unittest.TestCase):
         for invalid in (0, -1, "abc"):
             with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
                 self.settings(upload_max_bytes=invalid)
+
+    def test_storage_directory_is_anchored_to_project_root(self):
+        self.assertEqual(self.settings().upload_storage_dir, PROJECT_ROOT / "storage")
+        self.assertEqual(self.settings(upload_storage_dir="other-storage").upload_storage_dir,
+                         (PROJECT_ROOT / "other-storage").resolve())
 
     def test_port_and_empty_text_are_rejected(self):
         for port in (0, 65536, "abc"):

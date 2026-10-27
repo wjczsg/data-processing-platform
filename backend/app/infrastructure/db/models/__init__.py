@@ -3,5 +3,6 @@
 from backend.app.infrastructure.db.models.base import Base
 from backend.app.infrastructure.db.models.user import UserModel
 from backend.app.infrastructure.db.models.auth_session import AuthSessionModel, RefreshTokenModel
+from backend.app.infrastructure.db.models.uploaded_file import UploadedFileModel
 
-__all__ = ["Base", "UserModel", "AuthSessionModel", "RefreshTokenModel"]
+__all__ = ["Base", "UserModel", "AuthSessionModel", "RefreshTokenModel", "UploadedFileModel"]

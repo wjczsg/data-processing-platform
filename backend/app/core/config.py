@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = Field(default=30, ge=1, le=1440)
     auth_refresh_window_hours: int = Field(default=12, ge=1, le=168)
     upload_max_bytes: int = Field(default=50 * 1024 * 1024, gt=0)
+    upload_storage_dir: Path = PROJECT_ROOT / "storage"
+
+    @field_validator("upload_storage_dir")
+    @classmethod
+    def resolve_upload_storage_dir(cls, value: Path) -> Path:
+        """相对路径始终相对于项目根目录，避免启动目录不同导致文件位置变化。"""
+        return (value if value.is_absolute() else PROJECT_ROOT / value).resolve()
 
     @field_validator("jwt_secret_key", mode="before")
     @classmethod

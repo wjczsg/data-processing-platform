@@ -65,7 +65,7 @@
 
       <section id="rule-view" class="panel rules-panel" hidden><div class="section-bar"><h2>订单规则 · 展示示例</h2><span class="tag neutral">规则待接入</span></div><p class="rule-intro">以下仅为订单场景的规则示例，上传文件不要求包含这些列。通用表头确认和逐列规则尚未实现。</p><div id="rule-list"></div><div class="rule-format"><strong>当前上传能力</strong><p>支持 CSV 基础检查与原始记录预览，表头由用户确认的流程待实现。</p></div></section>
 
-      <footer class="page-footer"><span><span class="small-dot"></span>上传检查已接入 · 任务列表为示例</span><span>文件正式存储、后台任务和报告下载待实现。</span></footer>
+      <footer class="page-footer"><span><span class="small-dot"></span>上传检查已接入 · 任务列表为示例</span><span>文件存储已接入，后台任务和报告下载待实现。</span></footer>
     </main>
   </div>
 
@@ -74,12 +74,12 @@
     <div class="modal-body">
       <div class="field-label">CSV 文件</div>
       <label class="dropzone" id="dropzone" tabindex="0"><input type="file" id="file-input" name="file" accept=".csv,text/csv"><span class="upload-icon"><svg><use href="#i-upload"/></svg></span><strong id="drop-title">点击选择，或将文件拖到这里</strong><span id="drop-subtitle">每次一个 CSV · UTF-8 编码 · 默认上限 50 MiB</span></label>
-      <div class="notice"><svg><use href="#i-info"/></svg><p>文件仅用于本次检查和预览，尚未正式保存，也不会创建处理任务。刷新页面后预览不保留。</p></div>
+      <div class="notice"><svg><use href="#i-info"/></svg><p>检查通过后保存原文件和文件信息，暂不创建处理任务。刷新后预览不保留，文件列表查询尚未接入。</p></div>
       <p id="upload-status" class="upload-status" role="status" aria-live="polite" hidden></p>
       <p id="upload-error" class="form-error" role="alert" hidden></p>
       <a id="upload-login" class="upload-login" href="auth.html" hidden>前往登录</a>
       <section id="upload-result" class="upload-result" aria-label="文件检查结果与内容预览" hidden>
-        <div class="upload-result-heading"><h3>基础检查通过</h3><span class="tag neutral">文件尚未保存</span></div>
+        <div class="upload-result-heading"><h3>上传成功</h3><span class="tag neutral">文件已保存</span></div>
         <p id="upload-result-meta" class="small-note"></p>
         <p class="small-note">以下包含文件的首条记录，尚未确认哪条是表头；表头和逐列数据规则待后续确认。</p>
         <div id="upload-preview-scroll" class="upload-preview-scroll" tabindex="0" role="region" aria-label="CSV 前几条记录"><table class="upload-preview-table"><thead id="upload-preview-head"></thead><tbody id="upload-preview-body"></tbody></table></div>
@@ -92,7 +92,7 @@
 
   <dialog id="detail-dialog" class="detail-drawer" aria-labelledby="detail-title"><div class="drawer-head"><span>任务详情</span><button class="icon-button" data-close="detail-dialog" aria-label="关闭任务详情"><svg><use href="#i-close"/></svg></button></div><div id="detail-content"></div></dialog>
 
-  <dialog id="help-dialog" class="modal help-modal" aria-labelledby="help-title"><div class="modal-heading"><div><h2 id="help-title">使用说明</h2><p>上传检查可用，任务和文件列表仍为静态示例。</p></div><button class="icon-button" data-close="help-dialog" aria-label="关闭说明"><svg><use href="#i-close"/></svg></button></div><div class="modal-body help-content"><ol><li>登录后点击“上传文件”，选择或拖入一个 CSV。</li><li>点击“上传并预览”，由后端检查格式、编码及大小，并返回前 5 条记录。</li><li>错误提示会保留所选文件，修正问题后可以手动重试。</li><li>任务列表、进度、规则和报告区域目前用于布局展示。</li></ol><p>上传检查通过不代表订单或其他业务数据正确；目前没有表头确认、正式文件存储、后台任务或报告生成。</p></div><div class="modal-footer"><button class="button primary" data-close="help-dialog">知道了</button></div></dialog>
+  <dialog id="help-dialog" class="modal help-modal" aria-labelledby="help-title"><div class="modal-heading"><div><h2 id="help-title">使用说明</h2><p>上传检查可用，任务和文件列表仍为静态示例。</p></div><button class="icon-button" data-close="help-dialog" aria-label="关闭说明"><svg><use href="#i-close"/></svg></button></div><div class="modal-body help-content"><ol><li>登录后点击“上传文件”，选择或拖入一个 CSV。</li><li>点击“上传并预览”，由后端检查格式、编码及大小，并返回前 5 条记录。</li><li>错误提示会保留所选文件，修正问题后可以手动重试。</li><li>任务列表、进度、规则和报告区域目前用于布局展示。</li></ol><p>上传检查通过不代表订单或其他业务数据正确；原文件和文件信息已保存，目前没有表头确认、后台任务或报告生成。</p></div><div class="modal-footer"><button class="button primary" data-close="help-dialog">知道了</button></div></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

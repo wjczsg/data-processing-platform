@@ -1,4 +1,4 @@
-/* Authenticated, temporary CSV upload and preview. No task creation or automatic upload retry. */
+/* Authenticated CSV upload, persistence and preview. No task creation or automatic upload retry. */
 (function () {
   "use strict";
   const $ = id => document.getElementById(id);
@@ -53,7 +53,10 @@
   }
 
   function validResult(data) {
-    return data?.persisted === false && Number.isInteger(data.owner_id) && data.owner_id > 0
+    return data?.persisted === true
+      && typeof data.file_id === "string" && /^[0-9a-f]{32}$/.test(data.file_id)
+      && typeof data.created_at === "string" && Number.isFinite(Date.parse(data.created_at))
+      && Number.isInteger(data.owner_id) && data.owner_id > 0
       && (data.filename === null || typeof data.filename === "string")
       && Number.isInteger(data.size_bytes) && data.size_bytes >= 0
       && typeof data.preview_truncated === "boolean" && Array.isArray(data.preview_rows)
@@ -64,7 +67,7 @@
   function renderResult(data) {
     const rows = data.preview_rows;
     const columns = Math.max(0, ...rows.map(row => row.length));
-    $("upload-result-meta").textContent = `${data.filename || selectedFile.name} · ${formatSize(data.size_bytes)} · ${rows.length} 条预览记录`;
+    $("upload-result-meta").textContent = `${data.filename || selectedFile.name} · ${formatSize(data.size_bytes)} · ${rows.length} 条预览记录 · 文件编号 ${data.file_id}`;
     $("upload-preview-head").replaceChildren();
     $("upload-preview-body").replaceChildren();
     $("upload-preview-scroll").hidden = columns === 0;
@@ -138,7 +141,7 @@
       if (!response.ok) {
         const detail = typeof data?.detail === "string" ? data.detail
           : Array.isArray(data?.detail) ? data.detail.map(item => item.msg).filter(Boolean).join("；") : "";
-        throw new UploadError(response.status >= 500 ? "文件检查服务暂时不可用，请稍后手动重试。"
+        throw new UploadError(response.status >= 500 ? "暂时无法确认文件保存结果，请稍后核对；重复上传会生成新记录。"
           : detail || `文件未通过检查（${response.status}），请检查后重试。`);
       }
       if (!session.getToken()) throw new UploadError("登录状态已变化，请重新登录后再上传。", true);
@@ -146,17 +149,17 @@
         throw new UploadError("暂时无法确认上传结果，请确认登录账号后手动重试。");
       }
       renderResult(data);
-      setStatus("检查完成，文件尚未正式保存。");
+      setStatus("文件及信息已保存，尚未创建处理任务。");
     } catch (error) {
       if (version !== requestVersion) return;
       setStatus("");
-      if (timedOut) showError("请求超时，已保留所选文件，请稍后手动重试。");
+      if (timedOut) showError("请求超时，暂时无法确认保存结果；已保留所选文件，重复上传会生成新记录。");
       else if (error instanceof UploadError) showError(error.message, error.needsLogin);
       else if (error instanceof session.SessionExpiredError || error instanceof session.SessionChangedError) {
         showError("登录状态已变化，请重新登录后再上传。", true);
       } else if (error instanceof session.ConnectionError) {
         showError("暂时无法确认登录状态，已保留所选文件，请稍后重试。");
-      } else showError("连接失败，已保留所选文件，请检查网络或后端服务后手动重试。");
+      } else showError("连接失败，暂时无法确认保存结果；已保留所选文件，请检查网络或后端服务。");
     } finally {
       if (timeout !== null) window.clearTimeout(timeout);
       if (version === requestVersion) { activeController = null; setBusy(false); }

@@ -8,7 +8,7 @@ const source = fs.readFileSync(path.join(__dirname, '..', 'file-upload.js'), 'ut
 const settle = () => new Promise(resolve => setImmediate(resolve));
 const response = (status, data) => ({ status, ok: status >= 200 && status < 300, json: async () => data });
 const result = (overrides = {}) => ({ filename: 'students.csv', size_bytes: 20, owner_id: 1,
-  persisted: false, preview_rows: [['学号', '姓名'], ['001', '张三']], preview_truncated: false, ...overrides });
+  persisted: true, file_id: "a".repeat(32), created_at: "2026-10-27T00:00:00Z", preview_rows: [['学号', '姓名'], ['001', '张三']], preview_truncated: false, ...overrides });
 
 class Element {
   constructor(tag = 'div') {
@@ -69,7 +69,7 @@ test('picker submits native FormData with current Bearer token and renders gener
   let sent;
   const malicious = '<img src=x onerror=alert(1)>';
   const ui = page(async (url, options) => { sent = { url, options };
-    return response(200, result({ filename: malicious + '.csv', preview_rows: [['学号', '姓名'], ['001', malicious]] })); });
+    return response(201, result({ filename: malicious + '.csv', preview_rows: [['学号', '姓名'], ['001', malicious]] })); });
   await ui.select(csv()); await ui.submit();
   assert.equal(sent.url, 'http://127.0.0.1:8000/api/files');
   assert.equal(sent.options.headers.Authorization, 'Bearer access-after-refresh');
@@ -83,12 +83,12 @@ test('picker submits native FormData with current Bearer token and renders gener
   assert.equal(ui.get('upload-preview-body').children[1].children[1].textContent, '001');
   assert.equal(ui.get('upload-preview-body').children[1].children[2].textContent, malicious);
   assert(ui.get('upload-result-meta').textContent.includes(malicious));
-  assert(ui.get('upload-status').textContent.includes('尚未正式保存'));
+  assert(ui.get('upload-status').textContent.includes('已保存'));
 });
 
 test('dragged file is submitted and multiple dropped files are rejected without choosing the first', async () => {
   const files = [];
-  const ui = page(async (_, options) => { files.push(options.body.get('file').name); return response(200, result()); });
+  const ui = page(async (_, options) => { files.push(options.body.get('file').name); return response(201, result()); });
   await ui.select(csv('old.csv')); await ui.drop([csv('one.csv'), csv('two.csv')]);
   assert.equal(ui.get('submit-upload').disabled, true);
   assert(ui.get('upload-error').textContent.includes('每次只能上传一个文件'));
@@ -100,7 +100,7 @@ test('dragged file is submitted and multiple dropped files are rejected without 
 test('backend validation failures preserve the selection and allow an explicit retry', async () => {
   for (const [status, detail] of [[422, '不能上传空文件'], [413, '文件大小不能超过 50 MiB']]) {
     let calls = 0;
-    const ui = page(async () => ++calls === 1 ? response(status, { detail }) : response(200, result()));
+    const ui = page(async () => ++calls === 1 ? response(status, { detail }) : response(201, result()));
     await ui.select(csv()); await ui.submit();
     assert.equal(ui.get('upload-error').textContent, detail);
     assert.equal(ui.get('upload-result').hidden, true);
@@ -117,7 +117,7 @@ test('pending upload disables file changes and ignores duplicate submissions', a
   assert.equal(ui.get('file-input').disabled, true);
   assert.equal(ui.get('submit-upload').disabled, true);
   await ui.submit(); assert.equal(calls, 1);
-  resolve(response(200, result())); await first;
+  resolve(response(201, result())); await first;
   assert.equal(ui.get('file-input').disabled, false);
 });
 
@@ -136,7 +136,7 @@ test('closing a pending upload aborts its request and discards late results', as
   const ui = page((_, options) => { signal = options.signal; return new Promise(done => { resolve = done; }); });
   await ui.select(csv()); const pending = ui.submit(); await settle();
   await ui.close(); assert.equal(signal.aborted, true);
-  resolve(response(200, result())); await pending;
+  resolve(response(201, result())); await pending;
   assert.equal(ui.get('upload-result').hidden, true); assert.equal(ui.timers.size, 0);
 });
 
@@ -151,7 +151,7 @@ test('request timeout preserves the file and requires a manual retry', async () 
 
 test('expired login and static demo mode cannot submit files', async () => {
   let calls = 0;
-  const fetcher = async () => { calls++; return response(200, result()); };
+  const fetcher = async () => { calls++; return response(201, result()); };
   const expired = page(fetcher, { currentUser: session => { throw new session.SessionExpiredError(); } });
   await expired.select(csv()); await expired.submit();
   assert.equal(expired.get('upload-login').hidden, false);
@@ -162,7 +162,7 @@ test('expired login and static demo mode cannot submit files', async () => {
 });
 
 test('401 and mismatched or malformed responses never display a preview', async () => {
-  for (const reply of [response(401, {}), response(200, result({ owner_id: 2 })), response(200, {})]) {
+  for (const reply of [response(401, {}), response(201, result({ owner_id: 2 })), response(200, {}), response(201, result({ persisted: false }))]) {
     const ui = page(async () => reply);
     await ui.select(csv()); await ui.submit();
     assert.equal(ui.get('upload-result').hidden, true);
@@ -170,11 +170,11 @@ test('401 and mismatched or malformed responses never display a preview', async 
   }
 });
 
-test('truncation and an empty preview are shown without claiming valid headers or saved files', async () => {
-  const ui = page(async () => response(200, result({ preview_truncated: true })));
+test('truncation and an empty preview are shown without claiming valid headers or processing tasks', async () => {
+  const ui = page(async () => response(201, result({ preview_truncated: true })));
   await ui.select(csv()); await ui.submit();
   assert.equal(ui.get('upload-truncated').hidden, false);
-  const empty = page(async () => response(200, result({ preview_rows: [] })));
+  const empty = page(async () => response(201, result({ preview_rows: [] })));
   await empty.select(csv()); await empty.submit();
   assert.equal(empty.get('upload-preview-scroll').hidden, true);
   assert.equal(empty.get('upload-empty-preview').hidden, false);
