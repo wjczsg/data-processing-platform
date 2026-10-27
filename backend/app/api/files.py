@@ -3,6 +3,7 @@
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile as FormUploadFile
 
 from backend.app.api.dependencies import get_current_user
@@ -11,12 +12,14 @@ from backend.app.core.config import Settings, get_settings
 from backend.app.domain.file_rules import (
     EmptyFileError,
     FileTooLargeError,
+    InvalidCsvFormatError,
     InvalidFileEncodingError,
     validate_csv_filename,
     validate_file_size,
     validate_non_empty_file,
 )
 from backend.app.domain.user import User
+from backend.app.infrastructure.files.csv_format import validate_csv_format
 from backend.app.infrastructure.files.encoding import Utf8FileValidator
 
 router = APIRouter(prefix="/api/files", tags=["文件"])
@@ -26,7 +29,10 @@ router = APIRouter(prefix="/api/files", tags=["文件"])
     "",
     response_model=FileReceiveResponse,
     summary="临时接收单个文件",
-    description="验证登录，仅接收非零字节、UTF-8 编码的 .csv 文件（兼容 UTF-8 BOM，扩展名不区分大小写）。CSV 结构解析、正式存储、数据库记录和后台任务尚未接入。",
+    description=(
+        "验证登录，仅接收非零字节、UTF-8 编码的 .csv 文件（兼容 UTF-8 BOM，扩展名不区分大小写），"
+        "按逗号、双引号规则严格解析 CSV 语法。表头、列数、订单数据检查及正式存储、后台任务尚未接入。"
+    ),
     responses={413: {"description": "文件内容大小超过 UPLOAD_MAX_BYTES 配置上限，默认 50 MiB"}},
 )
 async def receive_file(
@@ -58,9 +64,11 @@ async def receive_file(
             encoding_validator.validate_chunk(chunk)
         validate_non_empty_file(size_bytes)
         encoding_validator.finish()
+        # 第二遍读取已有临时文件，逐条解析；同步解析放到线程池执行。
+        await run_in_threadpool(validate_csv_format, file.file)
     except FileTooLargeError as error:
         raise HTTPException(status_code=413, detail=str(error)) from error
-    except (EmptyFileError, InvalidFileEncodingError) as error:
+    except (EmptyFileError, InvalidFileEncodingError, InvalidCsvFormatError) as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
 
     # 临时文件由 FastAPI 在请求结束时关闭；正式存储后续通过存储接口接入。

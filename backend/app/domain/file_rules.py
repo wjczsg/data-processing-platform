@@ -15,6 +15,14 @@ class InvalidFileEncodingError(ValueError):
     """文件字节无法按要求的 UTF-8 编码完整解码。"""
 
 
+class InvalidCsvFormatError(ValueError):
+    """CSV 解析失败，行号表示已读取到的物理行位置。"""
+
+    def __init__(self, line_number: int) -> None:
+        self.line_number = line_number
+        super().__init__(f"CSV 格式错误，解析在第 {line_number} 个物理行附近失败")
+
+
 def validate_csv_filename(filename: str | None) -> None:
     """只允许 .csv 扩展名，忽略大小写；文件内容合法性由后续解析确认。"""
     if not filename or PurePath(filename).suffix.lower() != ".csv":

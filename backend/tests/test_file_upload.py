@@ -1,7 +1,8 @@
 """验证真实 multipart 请求、公共身份校验及单文件接收，不访问磁盘存储或 MySQL。"""
 
 import unittest
-from unittest.mock import Mock
+import threading
+from unittest.mock import Mock, patch
 
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
@@ -12,6 +13,7 @@ from backend.app.api.files import router
 from backend.app.application.ports.token_service import InvalidAccessTokenError
 from backend.app.core.config import Settings, get_settings
 from backend.app.domain.user import User
+from backend.app.infrastructure.files.csv_format import validate_csv_format
 from backend.app.infrastructure.files.encoding import Utf8FileValidator
 from backend.tests.asgi_client import request_json
 
@@ -129,6 +131,47 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_upload_does_not_leave_decoder_state_for_next_request(self):
         self.assertEqual((await self.upload([("file", "broken.csv", b"\xe4")]))[0], 422)
         self.assertEqual((await self.upload([("file", "orders.csv", b"order_id\nORD1\n")]))[0], 200)
+
+    async def test_csv_quoted_commas_double_quotes_and_multiline_fields_are_accepted(self):
+        data = ('order_id,product,amount\r\n'
+                'ORD1,"键盘,黑色",199\r\n'
+                'ORD2,"他说""你好""",89\r\n'
+                'ORD3,"第一行\r\n第二行",99\r\n').encode("utf-8")
+        for content in (data, b"\xef\xbb\xbf" + data):
+            with self.subTest(has_bom=content.startswith(b"\xef\xbb\xbf")):
+                status, body = await self.upload([("file", "orders.csv", content)])
+                self.assertEqual((status, body["size_bytes"]), (200, len(content)))
+
+    async def test_csv_syntax_errors_return_422_with_physical_line_location(self):
+        for content, line in ((b'a,b\n1,"unfinished\n', 2), (b'a,b\n1,"ok"x\n', 2),
+                              (b'a,b\n1,"line1\nline2"\n2,"unfinished', 4)):
+            with self.subTest(line=line, size=len(content)):
+                status, body = await self.upload([("file", "orders.csv", content)])
+                self.assertEqual((status, body), (422, {
+                    "detail": f"CSV 格式错误，解析在第 {line} 个物理行附近失败",
+                }))
+
+    async def test_csv_syntax_check_does_not_enforce_template_columns_or_business_rules(self):
+        for content in (b"custom\none,two,three\n", b"order_id,amount\nORD1,abc\n",
+                        b"order_id;product;amount\nORD1;keyboard;abc\n"):
+            with self.subTest(content=content):
+                self.assertEqual((await self.upload([("file", "orders.csv", content)]))[0], 200)
+
+    async def test_csv_parsing_runs_in_worker_and_framework_closes_temporary_file(self):
+        request_thread = threading.get_ident()
+        for content, expected_status in ((b"a,b\n1,2\n", 200), (b'a,b\n1,"unfinished', 422)):
+            observed = {}
+
+            def validate_in_worker(stream):
+                observed.update(thread=threading.get_ident(), stream=stream)
+                return validate_csv_format(stream)
+
+            with self.subTest(status=expected_status), patch(
+                "backend.app.api.files.validate_csv_format", side_effect=validate_in_worker,
+            ):
+                self.assertEqual((await self.upload([("file", "orders.csv", content)]))[0], expected_status)
+                self.assertNotEqual(observed["thread"], request_thread)
+                self.assertTrue(observed["stream"].closed)
 
     async def test_csv_extension_is_case_insensitive(self):
         for filename in ("orders.csv", "orders.CSV", "orders.CsV"):
