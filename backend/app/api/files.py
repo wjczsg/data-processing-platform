@@ -31,7 +31,8 @@ router = APIRouter(prefix="/api/files", tags=["文件"])
     summary="临时接收单个文件",
     description=(
         "验证登录，仅接收非零字节、UTF-8 编码的 .csv 文件（兼容 UTF-8 BOM，扩展名不区分大小写），"
-        "按逗号、双引号规则严格解析 CSV 语法。表头、列数、订单数据检查及正式存储、后台任务尚未接入。"
+        "按固定规则严格解析完整 CSV，返回前 5 条记录的预览，不自动识别表头。"
+        "表头、列数、数据规则检查及正式存储、后台任务尚未接入。"
     ),
     responses={413: {"description": "文件内容大小超过 UPLOAD_MAX_BYTES 配置上限，默认 50 MiB"}},
 )
@@ -65,7 +66,7 @@ async def receive_file(
         validate_non_empty_file(size_bytes)
         encoding_validator.finish()
         # 第二遍读取已有临时文件，逐条解析；同步解析放到线程池执行。
-        await run_in_threadpool(validate_csv_format, file.file)
+        preview = await run_in_threadpool(validate_csv_format, file.file)
     except FileTooLargeError as error:
         raise HTTPException(status_code=413, detail=str(error)) from error
     except (EmptyFileError, InvalidFileEncodingError, InvalidCsvFormatError) as error:
@@ -75,4 +76,5 @@ async def receive_file(
     return FileReceiveResponse(
         filename=file.filename, content_type=file.content_type,
         size_bytes=size_bytes, owner_id=user.id,
+        preview_rows=preview.rows, preview_truncated=preview.truncated,
     )

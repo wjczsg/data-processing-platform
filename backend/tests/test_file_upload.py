@@ -54,6 +54,10 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["content_type"], "text/csv")
         self.assertEqual(body["owner_id"], 7)
         self.assertIs(body["persisted"], False)
+        self.assertEqual(body["preview_rows"], [
+            ["order_id", "product", "amount", "order_date"], ["ORD1", "键盘", "199", "2026-10-26"],
+        ])
+        self.assertFalse(body["preview_truncated"])
         self.assertNotIn("password_hash", body)
         self.service.current_user.assert_called_once_with("test-access")
 
@@ -110,6 +114,20 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
                 content = b"a" * (1024 * 1024 - 1) + character.encode("utf-8") + b"\n"
                 status, body = await self.upload([("file", "orders.csv", content)])
                 self.assertEqual((status, body["size_bytes"]), (200, len(content)))
+                self.assertEqual(body["preview_rows"], [["a" * 200]])
+                self.assertTrue(body["preview_truncated"])
+
+    async def test_preview_keeps_first_data_record_and_reports_record_limit(self):
+        content = b"001,Alice,85\n002,Bob,90\n003,Carol,80\n004,Dan,75\n005,Eve,95\n006,Frank,88\n"
+        status, body = await self.upload([("file", "students.csv", content)])
+        self.assertEqual(status, 200)
+        self.assertEqual(body["preview_rows"], [
+            ["001", "Alice", "85"], ["002", "Bob", "90"], ["003", "Carol", "80"],
+            ["004", "Dan", "75"], ["005", "Eve", "95"],
+        ])
+        self.assertTrue(body["preview_truncated"])
+        self.assertNotIn("headers", body)
+        self.assertNotIn("has_header", body)
 
     async def test_invalid_utf8_is_rejected_including_errors_after_first_read_chunk(self):
         for content in (b"secret-order\xff", "中文".encode("gbk"), "orders".encode("utf-16"),
@@ -144,7 +162,8 @@ class FileUploadTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_csv_syntax_errors_return_422_with_physical_line_location(self):
         for content, line in ((b'a,b\n1,"unfinished\n', 2), (b'a,b\n1,"ok"x\n', 2),
-                              (b'a,b\n1,"line1\nline2"\n2,"unfinished', 4)):
+                              (b'a,b\n1,"line1\nline2"\n2,"unfinished', 4),
+                              (b'a,b\n' + b'1,2\n' * 5 + b'2,"unfinished', 7)):
             with self.subTest(line=line, size=len(content)):
                 status, body = await self.upload([("file", "orders.csv", content)])
                 self.assertEqual((status, body), (422, {

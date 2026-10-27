@@ -1,7 +1,8 @@
-"""按固定的逗号、双引号规则逐条校验 CSV 语法。"""
+"""按固定规则校验完整 CSV，并返回有界的原始记录预览。"""
 
 import csv
 import io
+from dataclasses import dataclass
 from typing import BinaryIO
 
 from backend.app.domain.file_rules import InvalidCsvFormatError, InvalidFileEncodingError
@@ -10,10 +11,21 @@ from backend.app.domain.file_rules import InvalidCsvFormatError, InvalidFileEnco
 # 进程加载时统一放宽，不在并发请求中修改全局配置；文件总大小由上传接口限制。
 csv.field_size_limit(max(csv.field_size_limit(), 2**31 - 1))
 
+PREVIEW_MAX_ROWS = 5
+PREVIEW_MAX_COLUMNS = 50
+PREVIEW_MAX_CELL_CHARS = 200
 
-def validate_csv_format(binary_file: BinaryIO) -> None:
-    """从头解析完整文件，不检查模板或业务数据；底层文件始终由调用方关闭。
 
+@dataclass(frozen=True)
+class CsvPreview:
+    rows: list[list[str]]
+    truncated: bool
+
+
+def validate_csv_format(binary_file: BinaryIO) -> CsvPreview:
+    """从头解析完整文件，保留前几条记录，不推断表头或检查业务数据。
+
+    预览限制只作用于返回内容；底层原始文件始终由调用方管理。
     同步读取和解析可能耗时，异步接口应在线程池中调用本函数。
     """
     binary_file.seek(0)
@@ -21,9 +33,20 @@ def validate_csv_format(binary_file: BinaryIO) -> None:
     reader = csv.reader(
         text_stream, delimiter=",", quotechar='"', doublequote=True, strict=True,
     )
+    preview_rows = []
+    truncated = False
     try:
-        for _ in reader:
-            pass
+        for row in reader:
+            if len(preview_rows) < PREVIEW_MAX_ROWS:
+                visible_cells = row[:PREVIEW_MAX_COLUMNS]
+                preview_rows.append([cell[:PREVIEW_MAX_CELL_CHARS] for cell in visible_cells])
+                if len(row) > PREVIEW_MAX_COLUMNS or any(
+                    len(cell) > PREVIEW_MAX_CELL_CHARS for cell in visible_cells
+                ):
+                    truncated = True
+            else:
+                # 仍继续解析后续记录，防止预览范围外的格式错误被漏过。
+                truncated = True
     except csv.Error as error:
         raise InvalidCsvFormatError(reader.line_num or 1) from error
     except UnicodeDecodeError as error:
@@ -33,3 +56,5 @@ def validate_csv_format(binary_file: BinaryIO) -> None:
     finally:
         # 解除文本包装，避免包装器提前关闭 FastAPI 管理的临时文件。
         text_stream.detach()
+
+    return CsvPreview(rows=preview_rows, truncated=truncated)
