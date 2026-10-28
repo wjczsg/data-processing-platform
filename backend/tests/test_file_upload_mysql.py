@@ -31,6 +31,7 @@ class MySQLFileUploadTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(self.directory.name)
         self.app.dependency_overrides[get_file_storage] = lambda: LocalFileStorage(self.root)
         self.username = "it_file_" + uuid4().hex[:16]
+        self.usernames = [self.username]
         payload = {"username": self.username, "password": "FileIntegration42!",
                    "password_confirmation": "FileIntegration42!"}
         status, registered = await post_json(app, payload)
@@ -47,9 +48,9 @@ class MySQLFileUploadTests(unittest.IsolatedAsyncioTestCase):
         self.app.dependency_overrides.pop(get_file_unit_of_work, None)
         try:
             with self.engine.begin() as connection:
-                user_ids = select(UserModel.id).where(UserModel.username == self.username)
+                user_ids = select(UserModel.id).where(UserModel.username.in_(self.usernames))
                 connection.execute(delete(UploadedFileModel).where(UploadedFileModel.owner_id.in_(user_ids)))
-                connection.execute(delete(UserModel).where(UserModel.username == self.username))
+                connection.execute(delete(UserModel).where(UserModel.username.in_(self.usernames)))
         finally:
             self.directory.cleanup()
             await self.lifecycle.__aexit__(None, None, None)
@@ -68,6 +69,95 @@ class MySQLFileUploadTests(unittest.IsolatedAsyncioTestCase):
         with self.engine.connect() as connection:
             return connection.execute(select(UploadedFileModel.__table__).where(
                 UploadedFileModel.owner_id == self.owner_id)).mappings().all()
+
+    async def confirm_header(self, file_id, has_header, *, token=None):
+        return await request_json(self.app, f"/api/files/{file_id}/header", "PUT", {"has_header": has_header},
+            headers={"Authorization": f"Bearer {token or self.token}"})
+
+    async def test_header_confirmation_commits_full_columns_and_repeated_calls_update_one_record(self):
+        names = [" 长列名" + "名" * 250 + " ", *[f"列{index}" for index in range(1, 55)]]
+        content = ("\ufeff" + ",".join(names) + "\n" + ",".join(["001"] * 55) + "\n").encode("utf-8")
+        status, upload = await self.upload(content)
+        self.assertEqual(status, 201)
+        self.assertEqual(len(upload["preview_rows"][0]), 50)
+        self.assertEqual(len(upload["preview_rows"][0][0]), 200)
+        before = self.stored_rows()[0]
+        for _ in range(2):
+            status, body = await self.confirm_header(upload["file_id"], True)
+            self.assertEqual(status, 200, body)
+            expected = [{"index": index, "name": name.strip()} for index, name in enumerate(names)]
+            self.assertEqual(body["columns"], expected)
+            row = self.stored_rows()[0]
+            self.assertTrue(row["has_header"])
+            self.assertEqual(row["columns"], expected)
+        status, body = await self.confirm_header(upload["file_id"], False)
+        self.assertEqual(status, 200)
+        self.assertFalse(body["has_header"])
+        expected = [{"index": index, "name": f"column_{index + 1}"} for index in range(55)]
+        rows = self.stored_rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["columns"], expected)
+        for key in ("id", "owner_id", "original_filename", "storage_key", "size_bytes", "created_at"):
+            self.assertEqual(rows[0][key], before[key])
+        self.assertEqual((self.root / before["storage_key"]).read_bytes(), content)
+        self.assertEqual(self.engine.pool.checkedout(), 0)
+
+    async def test_invalid_headers_do_not_replace_a_saved_no_header_configuration(self):
+        status, upload = await self.upload(b"name, name \n001,Alice\n")
+        self.assertEqual(status, 201)
+        self.assertEqual((await self.confirm_header(upload["file_id"], False))[0], 200)
+        before = dict(self.stored_rows()[0])
+        status, _ = await self.confirm_header(upload["file_id"], True)
+        self.assertEqual(status, 422)
+        self.assertEqual(dict(self.stored_rows()[0]), before)
+
+    async def test_other_logged_in_user_cannot_confirm_or_update_file(self):
+        status, upload = await self.upload()
+        self.assertEqual(status, 201)
+        username = self.username + "_b"
+        self.usernames.append(username)
+        status, other = await post_json(self.app, {"username": username, "password": "FileIntegration42!",
+            "password_confirmation": "FileIntegration42!"})
+        self.assertEqual(status, 201)
+        status, login = await request_json(self.app, "/api/auth/login", "POST", {
+            "username": username, "password": "FileIntegration42!",
+        })
+        self.assertEqual(status, 200)
+        status, response = await self.confirm_header(upload["file_id"], True, token=login["access_token"])
+        self.assertEqual((status, response), (404, {"detail": "文件不存在"}))
+        self.assertIsNone(self.stored_rows()[0]["has_header"])
+        self.assertIsNone(self.stored_rows()[0]["columns"])
+        # 仓库更新自身也校验归属，防止错误调用绕过前面的查询。
+        from backend.app.application.ports.file_repository import UploadedFileNotFoundError
+        from backend.app.domain.file_header import FileColumn, FileHeaderConfiguration
+        from backend.app.infrastructure.repositories.file_repository import MySQLFileRepository
+        with self.assertRaises(UploadedFileNotFoundError):
+            with self.app.state.session_factory.begin() as session:
+                MySQLFileRepository(session).update_header(
+                    FileHeaderConfiguration(upload["file_id"], True, (FileColumn(0, "code"),)), other["id"],
+                )
+        self.assertIsNone(self.stored_rows()[0]["has_header"])
+
+    async def test_header_commit_failure_rolls_back_both_configuration_fields(self):
+        status, upload = await self.upload()
+        self.assertEqual(status, 201)
+        self.assertEqual((await self.confirm_header(upload["file_id"], True))[0], 200)
+        before = dict(self.stored_rows()[0])
+
+        class FailingHeaderCommit(MySQLFileUnitOfWork):
+            def commit(self):
+                raise RuntimeError("simulated header commit failure")
+
+        def failing_uow(session: Session = Depends(get_database_session)):
+            return FailingHeaderCommit(session)
+
+        self.app.dependency_overrides[get_file_unit_of_work] = failing_uow
+        with self.assertLogs("backend.app.api.middleware.request_logging", level="ERROR"):
+            status, response = await self.confirm_header(upload["file_id"], False)
+        self.assertEqual(status, 500)
+        self.assertEqual(response["detail"], "Internal Server Error")
+        self.assertEqual(dict(self.stored_rows()[0]), before)
+        self.assertEqual(self.engine.pool.checkedout(), 0)
 
     async def test_duplicate_names_are_committed_with_own_identity_and_exact_original_bytes(self):
         content = b"\xef\xbb\xbfcode,name\r\n001,Alice\r\n"
@@ -103,7 +193,7 @@ class MySQLFileUploadTests(unittest.IsolatedAsyncioTestCase):
         )
         for has_header, columns in configurations:
             with self.subTest(has_header=has_header):
-                # 只验证模型和数据库的存储能力；确认接口和解析业务尚未接入。
+                # 直接验证 ORM 字段读写；HTTP 确认链路由本文件的其他测试覆盖。
                 with self.app.state.session_factory.begin() as session:
                     model = session.get(UploadedFileModel, response["file_id"])
                     model.has_header = has_header

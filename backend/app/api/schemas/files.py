@@ -1,9 +1,9 @@
-"""上传保存结果和有界内容预览。"""
+"""上传预览响应、表头确认请求及保存结果。"""
 
 from typing import Literal
 from datetime import datetime, timezone
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, field_validator
 
 
 class FileReceiveResponse(BaseModel):
@@ -26,3 +26,21 @@ class FileReceiveResponse(BaseModel):
     @classmethod
     def include_utc_timezone(cls, value: datetime) -> datetime:
         return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+class ConfirmFileHeaderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    has_header: StrictBool = Field(description="true：第一条 CSV 记录是表头；false：文件没有表头")
+
+
+class FileColumnResponse(BaseModel):
+    index: int = Field(description="从 0 开始的原始列序号")
+    name: str
+
+
+class FileHeaderResponse(BaseModel):
+    file_id: str
+    has_header: bool
+    columns: list[FileColumnResponse]
+    message: str = "表头设置已保存"

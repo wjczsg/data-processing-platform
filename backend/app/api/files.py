@@ -1,13 +1,20 @@
-"""验证 CSV，保存原始文件和 MySQL 文件记录，返回原始记录预览。"""
+"""上传保存 CSV、返回预览，以及确认已上传文件的表头设置。"""
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Path, Request, UploadFile
 from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile as FormUploadFile
 
-from backend.app.api.dependencies import get_current_user, get_store_uploaded_file_service
-from backend.app.api.schemas.files import FileReceiveResponse
+from backend.app.api.dependencies import (
+    get_confirm_file_header_service, get_current_user, get_store_uploaded_file_service,
+)
+from backend.app.api.schemas.files import (
+    ConfirmFileHeaderRequest, FileColumnResponse, FileHeaderResponse, FileReceiveResponse,
+)
+from backend.app.application.confirm_file_header import ConfirmFileHeaderService
+from backend.app.application.ports.file_repository import UploadedFileNotFoundError
+from backend.app.application.ports.file_storage import FileStorageError
 from backend.app.application.store_uploaded_file import StoreUploadedFileService
 from backend.app.core.config import Settings, get_settings
 from backend.app.domain.file_rules import (
@@ -21,6 +28,7 @@ from backend.app.domain.file_rules import (
 )
 from backend.app.domain.user import User
 from backend.app.domain.uploaded_file import FileMetadataError
+from backend.app.domain.file_header import InvalidFileHeaderError
 from backend.app.infrastructure.files.csv_format import validate_csv_format
 from backend.app.infrastructure.files.encoding import Utf8FileValidator
 
@@ -35,7 +43,7 @@ router = APIRouter(prefix="/api/files", tags=["文件"])
     description=(
         "验证登录，仅接收非零字节、UTF-8 编码的 .csv 文件（兼容 UTF-8 BOM，扩展名不区分大小写），"
         "严格解析完整 CSV 后保存原始文件和数据库记录，返回文件编号及前 5 条记录预览。"
-        "不自动识别表头；表头、列数、数据规则和后台任务尚未接入。"
+        "不自动识别表头；上传后可调用表头确认接口，列数一致性、数据规则和后台任务尚未接入。"
     ),
     responses={413: {"description": "文件内容大小超过 UPLOAD_MAX_BYTES 配置上限，默认 50 MiB"}},
 )
@@ -90,4 +98,36 @@ async def receive_file(
         filename=record.original_filename, content_type=file.content_type,
         size_bytes=record.size_bytes, owner_id=record.owner_id,
         preview_rows=preview.rows, preview_truncated=preview.truncated,
+    )
+
+
+@router.put(
+    "/{file_id}/header", response_model=FileHeaderResponse, summary="确认并保存文件表头设置",
+    description=(
+        "仅允许当前用户确认自己的文件，从已保存的原文件读取完整列信息。"
+        "有表头时使用首条 CSV 记录，去除列名两端空白后检查空名及重复名（区分大小写）；"
+        "无表头时从首条含字段的记录确定列数，生成 column_1 等标识。"
+        "重复调用更新同一条文件记录，不修改原文件，不创建处理任务。"
+    ),
+    responses={404: {"description": "文件不存在或不属于当前用户"},
+               503: {"description": "原文件暂时无法读取"}},
+)
+def confirm_file_header(
+    file_id: Annotated[str, Path(pattern=r"^[0-9a-f]{32}$", description="上传成功返回的 32 位文件编号")],
+    payload: ConfirmFileHeaderRequest,
+    user: Annotated[User, Depends(get_current_user)],
+    service: Annotated[ConfirmFileHeaderService, Depends(get_confirm_file_header_service)],
+) -> FileHeaderResponse:
+    # 同步路由由 FastAPI 在线程池执行，文件读取和数据库操作不阻塞事件循环。
+    try:
+        configuration = service.confirm(file_id=file_id, owner_id=user.id, has_header=payload.has_header)
+    except UploadedFileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="文件不存在") from error
+    except (InvalidFileHeaderError, InvalidCsvFormatError, InvalidFileEncodingError) as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except FileStorageError as error:
+        raise HTTPException(status_code=503, detail="原文件暂时无法读取，请稍后重试") from error
+    return FileHeaderResponse(
+        file_id=configuration.file_id, has_header=configuration.has_header,
+        columns=[FileColumnResponse(index=column.index, name=column.name) for column in configuration.columns],
     )

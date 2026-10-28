@@ -68,6 +68,11 @@ class CORSTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], 200)
         self.assertIn(b"GET", dict(response["headers"])[b"access-control-allow-methods"])
 
+    async def test_put_header_confirmation_allows_json_and_bearer_preflight(self):
+        response = await self.request("OPTIONS", "http://127.0.0.1:8765", "PUT", "content-type,authorization")
+        self.assertEqual(response["status"], 200)
+        self.assertIn(b"PUT", dict(response["headers"])[b"access-control-allow-methods"])
+
 
 if __name__ == "__main__":
     unittest.main()

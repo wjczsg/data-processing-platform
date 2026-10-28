@@ -6,7 +6,8 @@
   const previewOnly = new URLSearchParams(window.location.search).get("preview") === "1";
   const form = $("upload-form"), dialog = $("upload-dialog"), input = $("file-input");
   let selectedFile = null, busy = false, requestVersion = 0, activeController = null;
-  let uploadedResult = null, confirmedHasHeader = null;
+  let uploadedResult = null, confirmedHasHeader = null, confirmedColumns = null;
+  let savingHeader = false, headerSaveUncertain = false;
   const headerOptions = $("upload-header-options"), headerYes = $("upload-header-yes");
   const headerNo = $("upload-header-no"), confirmHeader = $("confirm-upload-header");
 
@@ -16,6 +17,15 @@
 
   const formatSize = bytes => bytes < 1024 ? `${bytes} B`
     : bytes < 1048576 ? `${(bytes / 1024).toFixed(1)} KiB` : `${(bytes / 1048576).toFixed(1)} MiB`;
+
+  function previewCell(value) {
+    let text = "", count = 0;
+    for (const character of value) {
+      if (count++ === 200) break;
+      text += character;
+    }
+    return text;
+  }
 
   function setStatus(message) {
     $("upload-status").textContent = message;
@@ -28,18 +38,29 @@
     $("upload-login").hidden = !needsLogin;
   }
 
-  function setBusy(value) {
+  function revealOutcome() {
+    const target = $("upload-error").hidden ? headerOptions : $("upload-error");
+    const top = dialog.scrollTop + target.getBoundingClientRect().top - dialog.getBoundingClientRect().top - 16;
+    dialog.scrollTo({ top: Math.max(0, top), behavior: "auto" });
+  }
+
+  function setBusy(value, operation = "upload") {
     busy = value;
+    savingHeader = value && operation === "header";
     form.setAttribute("aria-busy", String(value));
     input.disabled = value;
     $("dropzone").setAttribute("aria-disabled", String(value));
     $("submit-upload").disabled = value || !selectedFile || previewOnly;
-    $("submit-upload").textContent = value ? "上传并检查中…" : "上传并预览";
+    $("submit-upload").textContent = value && !savingHeader ? "上传并检查中…" : "上传并预览";
+    headerOptions.disabled = value || !uploadedResult?.preview_rows.length;
+    updateHeaderChoice();
   }
 
   function clearResult() {
     uploadedResult = null;
     confirmedHasHeader = null;
+    confirmedColumns = null;
+    headerSaveUncertain = false;
     headerYes.checked = false;
     headerNo.checked = false;
     headerOptions.disabled = true;
@@ -78,10 +99,10 @@
     // Always derive the view from the original response; changing the choice must never lose a row.
     const hasHeader = confirmedHasHeader === true;
     const rows = hasHeader ? data.preview_rows.slice(1) : data.preview_rows;
-    const columns = Math.max(0, ...data.preview_rows.map(row => row.length));
+    const columns = Math.min(50, Math.max(confirmedColumns?.length || 0, ...data.preview_rows.map(row => row.length)));
     $("upload-result-meta").textContent = `${data.filename || selectedFile.name} · ${formatSize(data.size_bytes)} · ${rows.length} 条预览记录 · 文件编号 ${data.file_id}`;
     $("upload-preview-note").textContent = confirmedHasHeader === null
-      ? "以下为原始记录，尚未选择是否包含表头。"
+      ? "以下为原始记录，表头设置尚未保存。"
       : hasHeader ? "首条记录用于列名，下方展示其余预览记录。"
         : "文件按无表头预览，首条记录保留为数据，使用第1列、第2列等展示标题。";
     $("upload-preview-head").replaceChildren();
@@ -93,17 +114,17 @@
       : rows.length
       ? "预览中只有空记录，没有可展示的字段；是否存在有效数据需后续确认。"
       : "文件中没有可预览的 CSV 记录；检查通过不代表存在有效数据。";
-    $("upload-truncated").hidden = !data.preview_truncated;
+    $("upload-truncated").hidden = !(data.preview_truncated || confirmedColumns?.length > 50
+      || confirmedColumns?.slice(0, 50).some(column => previewCell(column.name) !== column.name));
     if (columns) {
       const heading = document.createElement("tr");
       for (let column = 0; column <= columns; column++) {
         const cell = document.createElement("th");
         cell.scope = "col";
-        const name = hasHeader ? data.preview_rows[0][column - 1] : undefined;
+        const name = confirmedColumns?.[column - 1]?.name;
         cell.textContent = column === 0 ? "记录"
-          : !hasHeader ? `第${column}列`
-            : name === undefined ? `（首条记录无第${column}列）`
-              : name.trim() === "" ? `（第${column}列为空列名）` : name;
+          : confirmedColumns && name === undefined ? `（第${column}列未在确认列中）`
+            : !hasHeader ? `第${column}列` : previewCell(name);
         heading.appendChild(cell);
       }
       $("upload-preview-head").appendChild(heading);
@@ -125,21 +146,80 @@
 
   function updateHeaderChoice() {
     const choice = headerYes.checked && !headerYes.disabled ? true : headerNo.checked ? false : null;
-    confirmHeader.disabled = !uploadedResult || headerOptions.disabled || choice === null || choice === confirmedHasHeader;
-    $("upload-header-status").textContent = !uploadedResult || !uploadedResult.preview_rows.length
+    confirmHeader.disabled = busy || !uploadedResult || headerOptions.disabled || choice === null
+      || (choice === confirmedHasHeader && !headerSaveUncertain);
+    confirmHeader.textContent = savingHeader ? "保存中…" : "确认选择";
+    $("upload-header-status").textContent = savingHeader ? "正在保存表头设置…"
+      : headerSaveUncertain ? "保存结果未确认，请重试确认所选设置。"
+      : !uploadedResult || !uploadedResult.preview_rows.length
       ? "没有可预览的记录，暂时无法选择表头。"
       : choice === null ? (headerYes.disabled ? "首条记录没有字段，可选择按无表头预览。" : "请选择是否包含表头。")
-        : choice === confirmedHasHeader ? `已应用：${choice ? "第一条记录作为列名" : "全部记录作为数据"}（仅本次预览）。`
-          : "已选择，请点击确认应用到预览。";
+        : choice === confirmedHasHeader ? `表头设置已保存：${choice ? "第一条记录作为列名" : "全部记录作为数据"}。`
+          : "已选择，请点击确认保存设置。";
   }
 
   headerYes.addEventListener("change", updateHeaderChoice);
   headerNo.addEventListener("change", updateHeaderChoice);
-  confirmHeader.addEventListener("click", () => {
-    if (confirmHeader.disabled || !uploadedResult) return;
-    confirmedHasHeader = headerYes.checked;
-    renderResult(uploadedResult);
-    updateHeaderChoice();
+  confirmHeader.addEventListener("click", async () => {
+    if (busy || previewOnly || confirmHeader.disabled || !uploadedResult) return;
+    const record = uploadedResult, choice = headerYes.checked, previousUncertainty = headerSaveUncertain;
+    const version = ++requestVersion, controller = new AbortController();
+    activeController = controller;
+    let timeout = null, timedOut = false;
+    showError(); setBusy(true, "header"); setStatus("正在确认并保存表头设置…");
+    try {
+      const user = await session.currentUser();
+      if (version !== requestVersion) return;
+      if (user.id !== record.owner_id) throw new UploadError("当前账号与上传账号不一致，请重新登录。", true);
+      const token = session.getToken();
+      if (!token) throw new UploadError("请先登录后再确认表头。", true);
+      timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
+      // Once sent, losing the response does not establish whether the server committed.
+      headerSaveUncertain = true;
+      const response = await fetch(`${session.apiBaseUrl}/api/files/${record.file_id}/header`, {
+        method: "PUT", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ has_header: choice }), credentials: "omit", cache: "no-store", signal: controller.signal,
+      });
+      if (version !== requestVersion) return;
+      if (response.status === 401) {
+        headerSaveUncertain = previousUncertainty;
+        throw new UploadError("登录状态已失效，请重新登录后再确认。", true);
+      }
+      const data = await response.json();
+      if (version !== requestVersion) return;
+      if (!response.ok) {
+        // These responses mean this attempt did not update the configuration.
+        if (response.status < 500 || response.status === 503) headerSaveUncertain = previousUncertainty;
+        const detail = typeof data?.detail === "string" ? data.detail
+          : Array.isArray(data?.detail) ? data.detail.map(item => item.msg).filter(Boolean).join("；") : "";
+        throw new UploadError(response.status >= 500 && response.status !== 503
+          ? "暂时无法确认保存结果，请稍后重试确认。" : detail || "表头设置未通过检查，请修改后重试。");
+      }
+      if (!session.getToken()) throw new UploadError("登录状态已变化，请重新登录后再确认。", true);
+      if (data?.file_id !== record.file_id || data.has_header !== choice || !Array.isArray(data.columns)
+        || !data.columns.length || !data.columns.every((column, index) => column?.index === index
+          && typeof column.name === "string" && column.name.length > 0)) {
+        throw new UploadError("暂时无法确认保存结果，请重试确认。");
+      }
+      confirmedHasHeader = data.has_header;
+      confirmedColumns = data.columns;
+      headerSaveUncertain = false;
+      renderResult(record);
+      setStatus("文件及表头设置已保存，尚未创建处理任务。");
+    } catch (error) {
+      if (version !== requestVersion) return;
+      setStatus(headerSaveUncertain ? "文件已保存，表头设置的保存结果待确认。" : "文件已保存，本次表头确认未完成。");
+      if (timedOut) showError("保存请求超时，暂时无法确认结果，请重试确认。");
+      else if (error instanceof UploadError) showError(error.message, error.needsLogin);
+      else if (error instanceof session.SessionExpiredError || error instanceof session.SessionChangedError) {
+        showError("登录状态已变化，请重新登录后再确认。", true);
+      } else if (error instanceof session.ConnectionError) {
+        showError("暂时无法确认登录状态，请稍后重试。");
+      } else showError("暂时无法确认保存结果，当前文件和预览已保留，请重试确认。");
+    } finally {
+      if (timeout !== null) window.clearTimeout(timeout);
+      if (version === requestVersion) { activeController = null; setBusy(false); revealOutcome(); }
+    }
   });
 
   function cancelPending() {
@@ -207,7 +287,7 @@
       } else showError("连接失败，暂时无法确认保存结果；已保留所选文件，请检查网络或后端服务。");
     } finally {
       if (timeout !== null) window.clearTimeout(timeout);
-      if (version === requestVersion) { activeController = null; setBusy(false); }
+      if (version === requestVersion) { activeController = null; setBusy(false); revealOutcome(); }
     }
   });
 

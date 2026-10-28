@@ -15,11 +15,13 @@ from backend.app.application.ports.file_storage import FileStorage
 from backend.app.application.ports.token_service import InvalidAccessTokenError, TokenService
 from backend.app.application.register_user import RegisterUserService
 from backend.app.application.store_uploaded_file import StoreUploadedFileService
+from backend.app.application.confirm_file_header import ConfirmFileHeaderService
 from backend.app.core.config import Settings, get_settings
 from backend.app.domain.user import User
 from backend.app.infrastructure.db.session import session_scope
 from backend.app.infrastructure.db.unit_of_work import MySQLFileUnitOfWork, MySQLUserUnitOfWork
 from backend.app.infrastructure.files.local_storage import LocalFileStorage
+from backend.app.infrastructure.files.csv_format import read_file_columns
 
 
 bearer = HTTPBearer(auto_error=False)
@@ -48,6 +50,13 @@ def get_store_uploaded_file_service(
     storage: Annotated[FileStorage, Depends(get_file_storage)],
 ) -> StoreUploadedFileService:
     return StoreUploadedFileService(unit_of_work, storage)
+
+
+def get_confirm_file_header_service(
+    unit_of_work: Annotated[FileUnitOfWork, Depends(get_file_unit_of_work)],
+    storage: Annotated[FileStorage, Depends(get_file_storage)],
+) -> ConfirmFileHeaderService:
+    return ConfirmFileHeaderService(unit_of_work, storage, read_file_columns)
 
 
 def get_password_hasher(request: Request) -> PasswordHasher:

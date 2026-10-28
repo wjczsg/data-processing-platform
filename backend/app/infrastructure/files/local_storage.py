@@ -2,6 +2,8 @@
 
 import logging
 import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 from typing import BinaryIO
 
@@ -41,6 +43,14 @@ class LocalFileStorage(FileStorage):
             if isinstance(error, OSError):
                 raise FileStorageError("文件保存失败") from error
             raise
+
+    @contextmanager
+    def open_read(self, storage_key: str) -> Iterator[BinaryIO]:
+        try:
+            with self._path(storage_key).open("rb") as source:
+                yield source
+        except OSError as error:
+            raise FileStorageError("原文件暂时无法读取，请稍后重试") from error
 
     def delete(self, storage_key: str) -> None:
         try:

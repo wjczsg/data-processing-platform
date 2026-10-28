@@ -94,6 +94,23 @@ class FilePersistenceTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(FileStorageError):
                 self.storage.save(key, io.BytesIO(b"data"))
 
+    def test_read_only_stream_is_closed_even_when_caller_fails(self):
+        self.storage.save("uploads/read.csv", io.BytesIO(b"original"))
+        with self.assertRaisesRegex(RuntimeError, "parse failed"):
+            with self.storage.open_read("uploads/read.csv") as source:
+                self.assertEqual(source.read(), b"original")
+                self.assertFalse(source.writable())
+                raise RuntimeError("parse failed")
+        self.assertTrue(source.closed)
+        self.assertEqual((self.root / "uploads/read.csv").read_bytes(), b"original")
+
+    def test_missing_or_escaping_read_does_not_create_files(self):
+        for key in ("uploads/missing.csv", "../outside.csv"):
+            with self.subTest(key=key), self.assertRaises(FileStorageError):
+                with self.storage.open_read(key):
+                    self.fail("invalid read should not succeed")
+        self.assertEqual(list(self.root.iterdir()), [])
+
 
 if __name__ == "__main__":
     unittest.main()

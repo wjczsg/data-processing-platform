@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import BinaryIO
 
 from backend.app.domain.file_rules import InvalidCsvFormatError, InvalidFileEncodingError
+from backend.app.domain.file_header import FileColumn, InvalidFileHeaderError, build_file_columns
 
 # 标准库默认只允许 128 KiB 单字段，会误拒当前上传上限内的长字段。
 # 进程加载时统一放宽，不在并发请求中修改全局配置；文件总大小由上传接口限制。
@@ -58,3 +59,25 @@ def validate_csv_format(binary_file: BinaryIO) -> CsvPreview:
         text_stream.detach()
 
     return CsvPreview(rows=preview_rows, truncated=truncated)
+
+
+def read_file_columns(binary_file: BinaryIO, has_header: bool) -> tuple[FileColumn, ...]:
+    """按相同 CSV 规则读取完整列信息，不使用截断预览，不修改原文件。
+
+    有表头时严格使用首条记录；无表头时以首条含字段的记录确定列数，
+    此处只读取列结构，不改变后续数据处理对原始记录的读取。
+    """
+    binary_file.seek(0)
+    text_stream = io.TextIOWrapper(binary_file, encoding="utf-8-sig", errors="strict", newline="")
+    reader = csv.reader(text_stream, delimiter=",", quotechar='"', doublequote=True, strict=True)
+    try:
+        for row in reader:
+            if has_header or row:
+                return build_file_columns(row, has_header)
+        raise InvalidFileHeaderError("文件中没有可用于确定列信息的记录")
+    except csv.Error as error:
+        raise InvalidCsvFormatError(reader.line_num or 1) from error
+    except UnicodeDecodeError as error:
+        raise InvalidFileEncodingError("文件无法按 UTF-8 解码，请另存为 UTF-8 编码后重新上传") from error
+    finally:
+        text_stream.detach()

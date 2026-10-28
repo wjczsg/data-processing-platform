@@ -170,7 +170,7 @@ matches = hasher.verify_password(password, password_hash)
 - `409`：账号已存在。`422`：字段或密码规则不符合要求。`500`：未预期的内部处理失败，响应不暴露数据库或哈希异常细节。
 - 请求校验错误统一只返回错误位置、描述和类型，移除默认错误详情中的原始输入，避免回显明文密码。
 - 注册成功不会自动登录或签发令牌。前端注册按钮已接入，成功后切回登录表单，用户再提交登录。
-- `api/middleware/cors.py` 使用配置中的来源名单，允许账号所需的 `GET`、`POST`、`Content-Type` 及 `Authorization` 跨域请求，不启用 Cookie 凭据。默认支持两个本地 `8765` 来源，其他来源预检被拒绝。
+- `api/middleware/cors.py` 使用配置中的来源名单，允许账号所需的 `GET`、`POST`、`PUT`、`Content-Type` 及 `Authorization` 跨域请求，不启用 Cookie 凭据。默认支持两个本地 `8765` 来源，其他来源预检被拒绝。
 
 接口规则测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_registration -v`。
 
@@ -259,7 +259,21 @@ MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前�
 - `infrastructure/db/models/uploaded_file.py`：映射 `uploaded_files`；仓库执行插入和 flush，业务服务决定 commit。
 - `api/dependencies.py`：组装实现；同一次请求内认证与文件保存复用数据库 Session，请求结束关闭，异常回滚。
 
-默认 `UPLOAD_STORAGE_DIR=storage`，相对路径以项目根目录为准。原文件位于 `storage/uploads/{owner_id}/{file_id}.csv`；数据库保存原名、位置、大小、所属用户及时间，不存文件内容。同名重复上传生成不同文件。文件与 MySQL 的失败处理边界见主 README，提交结果不确定时保留文件供核对；尚无自动残留清理、列表、下载、表头确认或任务接口。
+默认 `UPLOAD_STORAGE_DIR=storage`，相对路径以项目根目录为准。原文件位于 `storage/uploads/{owner_id}/{file_id}.csv`；数据库保存原名、位置、大小、所属用户及时间，不存文件内容。同名重复上传生成不同文件。文件与 MySQL 的失败处理边界见主 README，提交结果不确定时保留文件供核对；尚无自动残留清理、列表、下载或任务接口；表头确认接口见下文。
 
 
-文件表已预留表头设置：`has_header=None` 表示未确认，`True`/`False` 分别表示有/无表头；`columns` 用 JSON 保存按顺序排列的列信息，例如 `[{"index": 0, "name": "学号"}]`，序号从 0 开始。两列允许 SQL `NULL`，`JSON(none_as_null=True)` 使 Python `None` 对应 SQL `NULL`。当前上传流程不写入表头设置，前端选择仍只影响预览，确认接口、列名检查和配置写入业务尚未接入。
+文件表已预留表头设置：`has_header=None` 表示未确认，`True`/`False` 分别表示有/无表头；`columns` 用 JSON 保存按顺序排列的列信息，例如 `[{"index": 0, "name": "学号"}]`，序号从 0 开始。两列允许 SQL `NULL`，`JSON(none_as_null=True)` 使 Python `None` 对应 SQL `NULL`。当前上传流程不写入表头设置，后端确认接口已支持列名检查和设置保存，前端确认按钮已接入它。
+
+
+## 表头确认
+
+`PUT /api/files/{file_id}/header` 接收 `{"has_header": true}` 或 `{"has_header": false}`，使用现有 Bearer 登录认证，只允许确认当前用户的文件。成功返回 `200` 和完整列信息，文件未找到/归属不符统一 `404`，请求或列名不合格 `422`，原文件暂时无法读取 `503`。
+
+- `api/files.py`、`api/schemas/files.py`：校验编号和严格布尔请求，映射业务异常为 HTTP 响应。同步路由由 FastAPI 在线程池执行。
+- `application/confirm_file_header.py`：查询归属、只读打开原文件、调用注入的解析函数、更新设置并提交；异常回滚仍由请求级 `session_scope` 管理。
+- `domain/file_header.py`：确认结果和列数据结构，列名去除两端空白后检查空值及重复值，重复判断区分大小写。
+- `infrastructure/files/csv_format.py` 的 `read_file_columns`：读取完整首条 CSV 记录；无表头时读取首条含字段的记录以确定列数。读取规则与上传相同，不使用截断预览。
+- `FileRepository` / `MySQLFileRepository`：查询和更新均按文件编号与当前用户编号过滤；设置写入 `has_header`、`columns`，仓库不自行提交。
+- `FileStorage.open_read` / `LocalFileStorage.open_read`：在专用目录内以二进制只读打开，离开上下文时关闭；不修改、复制或删除原文件。
+
+重复确认更新同一条记录，不新增文件或任务。无表头时生成 `column_1` 等标识，原文件记录不丢弃；列数一致性和逐行业务检查留待后续。前端确认按钮会调用此接口，成功后更新预览及保存提示。Swagger 操作步骤见主 README。
