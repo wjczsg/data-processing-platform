@@ -212,6 +212,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 - `0002_create_auth_sessions.py` 仅新增登录会话及续期凭据表和索引，不修改用户表；降级会删除登录会话记录。
 - `0003_create_uploaded_files_table.py` 新增 `uploaded_files`，仅保存文件信息及用户归属；原 CSV 在本地存储目录，已有用户和会话不变。
 - `0004_add_file_header_configuration.py` 在文件表增加可空的 `has_header`（布尔）和 `columns`（JSON），既有记录保持未确认，原文件信息不变。降级会删除这两个字段及其设置值。
+- `0005_create_processing_tasks_table.py` 新增 `processing_tasks` 表和文件/用户索引，文件与用户外键均使用 `RESTRICT`。仅创建表结构，不插入任务或修改已有业务数据；降级会删除任务表及其记录。
 - 生成迁移时不自动创建版本跟踪表；真正执行升级时才创建并更新 `alembic_version`。
 
 在项目根目录查看已有版本：
@@ -226,7 +227,7 @@ Remove-Item Env:RUN_MYSQL_TESTS
 .\.venv\Scripts\python.exe -m alembic upgrade head --sql
 ```
 
-应用迁移可执行 `.\.venv\Scripts\python.exe -m alembic upgrade head`。本地已执行到 `0004`，并通过 `alembic check` 确认数据库结构与当前模型一致。
+应用迁移可执行 `.\.venv\Scripts\python.exe -m alembic upgrade head`。本地已执行到 `0005`，并通过 `alembic check` 确认数据库结构与当前模型一致。
 首次应用会创建 `users` 和 `alembic_version`，不会自动插入用户。
 MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前需检查是否删除表或字段。
 自动生成的脚本必须审查，字段改名、数据转换和已有 CHECK 约束变更尤其需要手动核对。
@@ -277,3 +278,31 @@ MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前�
 - `FileStorage.open_read` / `LocalFileStorage.open_read`：在专用目录内以二进制只读打开，离开上下文时关闭；不修改、复制或删除原文件。
 
 重复确认更新同一条记录，不新增文件或任务。无表头时生成 `column_1` 等标识，原文件记录不丢弃；列数一致性和逐行业务检查留待后续。前端确认按钮会调用此接口，成功后更新预览及保存提示。Swagger 操作步骤见主 README。
+
+## 处理任务表
+
+`infrastructure/db/models/processing_task.py` 声明 `ProcessingTaskModel`，并在模型包中注册供 Alembic 发现。当前仅完成表结构，尚未接入任务仓库、创建/查询接口或后台执行。
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 32 位任务编号，主键，由后续业务服务生成 |
+| `file_id` | 外键关联 `uploaded_files.id`，带查询索引；同一文件允许多个任务 |
+| `owner_id` | 外键关联 `users.id`，带查询索引；后续创建服务还需检查文件归属一致 |
+| `status` | ORM 和数据库均默认 `pending`，数据库约束只允许 pending、running、succeeded、failed |
+| `created_at` | 创建时间，ORM 默认写入 UTC 的 DATETIME(6) |
+| `updated_at` | 更新时间，ORM 默认写入 UTC，ORM 更新记录时自动刷新 |
+
+时间默认值和自动更新时间由 SQLAlchemy 执行；直接执行 SQL 时应显式提供时间，并在更新时维护 `updated_at`。状态约束限制取值，不负责状态流转规则。外键阻止删除仍被任务引用的文件或用户。
+
+真实 MySQL 验证（先应用迁移；测试写入全部回滚，不留下任务、文件或账号记录）：
+
+```powershell
+$env:RUN_MYSQL_TESTS = "1"
+try {
+    .\.venv\Scripts\python.exe -m unittest backend.tests.test_processing_task_mysql -v
+} finally {
+    Remove-Item Env:RUN_MYSQL_TESTS
+}
+```
+
+覆盖同一文件多个任务、默认状态、非法状态拒绝、外键、删除限制、时间更新和事务回滚。测试中的文件信息仅写数据库，未创建磁盘原文件；MySQL 自增用户编号可能前进。
