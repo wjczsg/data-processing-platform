@@ -260,7 +260,7 @@ MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前�
 - `infrastructure/db/models/uploaded_file.py`：映射 `uploaded_files`；仓库执行插入和 flush，业务服务决定 commit。
 - `api/dependencies.py`：组装实现；同一次请求内认证与文件保存复用数据库 Session，请求结束关闭，异常回滚。
 
-默认 `UPLOAD_STORAGE_DIR=storage`，相对路径以项目根目录为准。原文件位于 `storage/uploads/{owner_id}/{file_id}.csv`；数据库保存原名、位置、大小、所属用户及时间，不存文件内容。同名重复上传生成不同文件。文件与 MySQL 的失败处理边界见主 README，提交结果不确定时保留文件供核对；尚无自动残留清理、列表、下载或任务接口；表头确认接口见下文。
+默认 `UPLOAD_STORAGE_DIR=storage`，相对路径以项目根目录为准。原文件位于 `storage/uploads/{owner_id}/{file_id}.csv`；数据库保存原名、位置、大小、所属用户及时间，不存文件内容。同名重复上传生成不同文件。文件与 MySQL 的失败处理边界见主 README，提交结果不确定时保留文件供核对；尚无自动残留清理、文件列表或下载接口；表头确认和任务创建接口见下文。
 
 
 文件表已预留表头设置：`has_header=None` 表示未确认，`True`/`False` 分别表示有/无表头；`columns` 用 JSON 保存按顺序排列的列信息，例如 `[{"index": 0, "name": "学号"}]`，序号从 0 开始。两列允许 SQL `NULL`，`JSON(none_as_null=True)` 使 Python `None` 对应 SQL `NULL`。当前上传流程不写入表头设置，后端确认接口已支持列名检查和设置保存，前端确认按钮已接入它。
@@ -281,13 +281,13 @@ MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前�
 
 ## 处理任务表
 
-`infrastructure/db/models/processing_task.py` 声明 `ProcessingTaskModel`，并在模型包中注册供 Alembic 发现。当前仅完成表结构，尚未接入任务仓库、创建/查询接口或后台执行。
+`infrastructure/db/models/processing_task.py` 声明 `ProcessingTaskModel`，并在模型包中注册供 Alembic 发现。创建任务服务直接使用 ORM 保存记录，已接入创建接口；任务查询和后台执行待实现。
 
 | 字段 | 含义 |
 | --- | --- |
-| `id` | 32 位任务编号，主键，由后续业务服务生成 |
+| `id` | 32 位任务编号，主键，由创建任务服务生成 |
 | `file_id` | 外键关联 `uploaded_files.id`，带查询索引；同一文件允许多个任务 |
-| `owner_id` | 外键关联 `users.id`，带查询索引；后续创建服务还需检查文件归属一致 |
+| `owner_id` | 外键关联 `users.id`，带查询索引；创建服务检查文件归属一致 |
 | `status` | ORM 和数据库均默认 `pending`，数据库约束只允许 pending、running、succeeded、failed |
 | `created_at` | 创建时间，ORM 默认写入 UTC 的 DATETIME(6) |
 | `updated_at` | 更新时间，ORM 默认写入 UTC，ORM 更新记录时自动刷新 |
@@ -306,3 +306,33 @@ try {
 ```
 
 覆盖同一文件多个任务、默认状态、非法状态拒绝、外键、删除限制、时间更新和事务回滚。测试中的文件信息仅写数据库，未创建磁盘原文件；MySQL 自增用户编号可能前进。
+
+## 创建处理任务
+
+`POST /api/tasks` 接收 `{"file_id": "上传返回的32位编号"}`，复用现有 Bearer 认证。只接受文件编号，拒绝客户端指定 owner_id、status 或 task_id。新任务成功提交后返回 `201` 和 task_id、file_id、status（固定为 pending）。
+
+实现按调用顺序分为四处：
+
+1. `api/schemas/tasks.py` 定义请求和响应，检查文件编号并拒绝额外字段。
+2. `api/tasks.py` 通过 `get_current_user` 获取登录身份，通过 `get_database_session` 取得与认证复用的 Session。
+3. `application/create_processing_task.py` 用文件编号和当前用户编号联合查询，生成 UUID 任务编号，组装 `ProcessingTaskModel`，add 后 commit；返回值在提交前整理，避免提交后访问过期 ORM 对象又发起查询。
+4. `main.py` 注册任务路由。
+
+业务方法不自行关闭 Session；异常继续交给已有 `session_scope` 回滚和关闭。文件不存在与归属不符均返回 `404`；认证失败 `401`，参数不符 `422`，未预期失败使用通用 `500` 响应。数据库提交成功才返回任务信息。
+
+当前创建任务不要求表头已确认，不读取原文件或执行校验；每次调用创建独立记录，尚未实现请求去重、任务查询、后台执行或前端任务创建。
+
+普通接口测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_task_creation -v`。
+
+真实 MySQL 创建任务测试（提交唯一临时账号、文件和任务，仅清理本次数据）：
+
+```powershell
+$env:RUN_MYSQL_TESTS = "1"
+try {
+    .\.venv\Scripts\python.exe -m unittest backend.tests.test_create_processing_task_mysql backend.tests.test_file_upload_mysql.MySQLFileUploadTests.test_uploaded_file_can_create_a_committed_pending_task -v
+} finally {
+    Remove-Item Env:RUN_MYSQL_TESTS
+}
+```
+
+验证真实提交、其他用户文件拒绝、文件不存在、同一文件多个独立任务、提交失败回滚，以及真实登录上传后调用任务接口的完整流程。

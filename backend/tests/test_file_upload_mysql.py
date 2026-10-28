@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import get_database_session, get_file_storage, get_file_unit_of_work
 from backend.app.infrastructure.db.models.uploaded_file import UploadedFileModel
+from backend.app.infrastructure.db.models.processing_task import ProcessingTaskModel
 from backend.app.infrastructure.db.models.user import UserModel
 from backend.app.infrastructure.db.unit_of_work import MySQLFileUnitOfWork
 from backend.app.infrastructure.files.local_storage import LocalFileStorage
@@ -49,6 +50,7 @@ class MySQLFileUploadTests(unittest.IsolatedAsyncioTestCase):
         try:
             with self.engine.begin() as connection:
                 user_ids = select(UserModel.id).where(UserModel.username.in_(self.usernames))
+                connection.execute(delete(ProcessingTaskModel).where(ProcessingTaskModel.owner_id.in_(user_ids)))
                 connection.execute(delete(UploadedFileModel).where(UploadedFileModel.owner_id.in_(user_ids)))
                 connection.execute(delete(UserModel).where(UserModel.username.in_(self.usernames)))
         finally:
@@ -73,6 +75,26 @@ class MySQLFileUploadTests(unittest.IsolatedAsyncioTestCase):
     async def confirm_header(self, file_id, has_header, *, token=None):
         return await request_json(self.app, f"/api/files/{file_id}/header", "PUT", {"has_header": has_header},
             headers={"Authorization": f"Bearer {token or self.token}"})
+
+    async def test_uploaded_file_can_create_a_committed_pending_task(self):
+        status, upload = await self.upload()
+        self.assertEqual(status, 201)
+        status, task = await request_json(self.app, "/api/tasks", "POST", {"file_id": upload["file_id"]},
+                                        headers={"Authorization": f"Bearer {self.token}"})
+        self.assertEqual(status, 201)
+        self.assertEqual(task["file_id"], upload["file_id"])
+        self.assertEqual(task["status"], "pending")
+        with self.engine.connect() as connection:
+            row = connection.execute(select(ProcessingTaskModel.__table__).where(
+                ProcessingTaskModel.id == task["task_id"],
+            )).mappings().one()
+        self.assertEqual(row["owner_id"], self.owner_id)
+        self.assertEqual(row["file_id"], upload["file_id"])
+        self.assertEqual(row["status"], "pending")
+        self.assertIsNotNone(row["created_at"])
+        self.assertIsNotNone(row["updated_at"])
+        # 该接口只创建记录，不要求表头已确认，也不修改文件配置。
+        self.assertIsNone(self.stored_rows()[0]["has_header"])
 
     async def test_header_confirmation_commits_full_columns_and_repeated_calls_update_one_record(self):
         names = [" 长列名" + "名" * 250 + " ", *[f"列{index}" for index in range(1, 55)]]

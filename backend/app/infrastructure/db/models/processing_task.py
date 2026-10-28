@@ -1,4 +1,4 @@
-"""处理任务表，仅声明结构；创建任务的业务流程后续接入。"""
+"""处理任务表结构，供创建任务业务保存记录。"""
 
 from datetime import datetime, timezone
 
@@ -23,13 +23,13 @@ class ProcessingTaskModel(Base):
         {"mysql_engine": "InnoDB", "mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_0900_ai_ci"},
     )
 
-    # 编号由后续创建任务服务生成；同一文件允许创建多个独立任务。
+    # 编号由创建任务服务生成；同一文件允许创建多个独立任务。
     id: Mapped[str] = mapped_column(String(32, collation="utf8mb4_bin"), primary_key=True)
     file_id: Mapped[str] = mapped_column(
         String(32, collation="utf8mb4_bin"),
         ForeignKey("uploaded_files.id", ondelete="RESTRICT"), nullable=False, index=True,
     )
-    # 后续业务服务还需校验该用户也是关联文件的所属用户。
+    # 创建任务服务同时校验该用户也是关联文件的所属用户。
     owner_id: Mapped[int] = mapped_column(
         BIGINT(unsigned=True), ForeignKey("users.id", ondelete="RESTRICT"), nullable=False, index=True,
     )
