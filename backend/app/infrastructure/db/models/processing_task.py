@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, text
+from sqlalchemy import CheckConstraint, ForeignKey, Index, JSON, String, Text, text
 from sqlalchemy.dialects.mysql import BIGINT, DATETIME
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -20,6 +20,7 @@ class ProcessingTaskModel(Base):
         CheckConstraint(
             "status IN ('pending', 'running', 'succeeded', 'failed')", name="status",
         ),
+        Index("ix_processing_tasks_status_created_at_id", "status", "created_at", "id"),
         {"mysql_engine": "InnoDB", "mysql_charset": "utf8mb4", "mysql_collate": "utf8mb4_0900_ai_ci"},
     )
 
@@ -37,6 +38,15 @@ class ProcessingTaskModel(Base):
         String(16, collation="utf8mb4_bin"), default="pending",
         server_default=text("'pending'"), nullable=False,
     )
+    # None 表示尚未保存输入配置；下一步创建任务时写入表头和完整列结构快照。
+    input_config: Mapped[dict[str, object] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
+    processed_rows: Mapped[int] = mapped_column(
+        BIGINT(unsigned=True), default=0, server_default=text("0"), nullable=False,
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 领取、执行逻辑接入后显式填写；创建任务不等于已经开始处理。
+    started_at: Mapped[datetime | None] = mapped_column(DATETIME(fsp=6), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DATETIME(fsp=6), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DATETIME(fsp=6), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DATETIME(fsp=6), default=utc_now, onupdate=utc_now, nullable=False,
