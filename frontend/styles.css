@@ -38,6 +38,9 @@ body[data-auth-state="pending"] .sidebar,body[data-auth-state="pending"] .shell{
 .upload-header-actions{display:flex;align-items:center;flex-wrap:wrap;gap:10px 12px;margin-top:14px}
 .upload-header-actions>span{font-size:11px;color:var(--muted);line-height:1.8;overflow-wrap:anywhere}
 .upload-header-options .small-note{margin-top:10px}
+.upload-task{margin-top:20px;padding:16px;border:1px solid var(--line);border-radius:4px;background:#fafcfb}
+.upload-task h3{font-size:13px;font-weight:600;margin:0}
+#upload-task-result{color:var(--green);overflow-wrap:anywhere}
 .upload-preview-scroll{overflow:auto;max-height:300px;margin-top:16px;border:1px solid var(--line);border-radius:4px}
 .upload-preview-table{min-width:100%;width:max-content;border-collapse:collapse;white-space:normal}
 .upload-preview-table th,.upload-preview-table td{height:auto;min-width:110px;max-width:280px;padding:10px 12px;font-size:11px;line-height:1.7;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}

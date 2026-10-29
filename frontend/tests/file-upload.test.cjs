@@ -49,7 +49,8 @@ function page(fetcher, { previewOnly = false, currentUser } = {}) {
     'dropzone', 'submit-upload', 'upload-result', 'upload-preview-head', 'upload-preview-body', 'drop-title',
     'drop-subtitle', 'upload-result-meta', 'upload-preview-scroll', 'upload-empty-preview', 'upload-truncated',
     'new-task-button', 'upload-header-options', 'upload-header-yes', 'upload-header-no',
-    'confirm-upload-header', 'upload-header-status', 'upload-preview-note'];
+    'confirm-upload-header', 'upload-header-status', 'upload-preview-note', 'create-upload-task',
+    'upload-task', 'upload-task-status', 'upload-task-result'];
   const elements = new Map(ids.map(id => [id, new Element()]));
   for (const id of ['upload-result', 'upload-status', 'upload-error', 'upload-login']) elements.get(id).hidden = true;
   const timers = new Map(); let sequence = 0, token = 'access-after-refresh', identityChecks = 0;
@@ -75,6 +76,7 @@ function page(fetcher, { previewOnly = false, currentUser } = {}) {
       await elements.get(hasHeader ? 'upload-header-yes' : 'upload-header-no').emit('change');
     },
     confirmHeader: () => elements.get('confirm-upload-header').emit('click'),
+    createTask: () => elements.get('create-upload-task').emit('click'),
     drop: files => elements.get('dropzone').emit('drop', { dataTransfer: { files } }),
     close: () => elements.get('upload-dialog').emit('close'),
     expire: () => { for (const fn of [...timers.values()]) fn(); } };
@@ -395,4 +397,182 @@ test('rejected or malformed header responses never claim a successful save', asy
     assert.equal(ui.get('upload-error').hidden, false);
     assert(!ui.get('upload-header-status').textContent.includes('已保存'));
   }
+});
+
+const taskResult = (overrides = {}) => ({ task_id: 'b'.repeat(32), file_id: 'a'.repeat(32), status: 'pending', ...overrides });
+const taskPage = (taskFetcher = async () => response(201, taskResult()), settings) => page(
+  async (url, options) => url.endsWith('/api/tasks') ? taskFetcher(url, options) : uploadAndHeader()(url, options), settings);
+async function readyTask(ui, hasHeader = true) {
+  await ui.select(csv()); await ui.submit(); await ui.chooseHeader(hasHeader); await ui.confirmHeader();
+}
+
+test('task creation requires an acknowledged current header choice', async () => {
+  let calls = 0;
+  const ui = taskPage(async () => { calls++; return response(201, taskResult()); });
+  await ui.createTask();
+  await ui.select(csv()); await ui.submit(); await ui.createTask();
+  assert.equal(ui.get('create-upload-task').disabled, true);
+  await ui.chooseHeader(true); await ui.createTask();
+  assert.equal(calls, 0);
+  await ui.confirmHeader();
+  assert.equal(ui.get('create-upload-task').disabled, false);
+  await ui.chooseHeader(false);
+  assert.equal(ui.get('create-upload-task').disabled, true);
+  await ui.createTask(); assert.equal(calls, 0);
+  await ui.confirmHeader();
+  assert.equal(ui.get('create-upload-task').disabled, false);
+  await ui.createTask(); assert.equal(calls, 1);
+});
+
+test('task POST uses the current file and Bearer identity and displays only validated pending results', async () => {
+  for (const hasHeader of [true, false]) {
+    let sent, calls = 0;
+    const ui = taskPage(async (url, options) => { sent = { url, options }; calls++; return response(201, taskResult()); });
+    await readyTask(ui, hasHeader); await ui.createTask();
+    assert.equal(sent.url, 'http://127.0.0.1:8000/api/tasks');
+    assert.equal(sent.options.method, 'POST');
+    assert.equal(sent.options.headers.Authorization, 'Bearer access-after-refresh');
+    assert.equal(sent.options.headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(sent.options.body), { file_id: 'a'.repeat(32) });
+    assert.equal(sent.options.credentials, 'omit');
+    assert.equal(ui.identityChecks(), 3);
+    assert.equal(ui.get('upload-task-result').hidden, false);
+    assert(ui.get('upload-task-result').textContent.includes('b'.repeat(32)));
+    assert(ui.get('upload-task-result').textContent.includes('pending'));
+    assert.equal(ui.get('create-upload-task').disabled, true);
+    assert.equal(ui.get('upload-header-options').disabled, true);
+    await ui.createTask(); assert.equal(calls, 1);
+  }
+});
+
+test('pending task creation disables duplicate clicks, uploads and header changes', async () => {
+  let resolve, calls = 0;
+  const ui = taskPage(() => { calls++; return new Promise(done => { resolve = done; }); });
+  await readyTask(ui);
+  const pending = ui.createTask(); await settle();
+  assert.equal(ui.get('create-upload-task').textContent, '创建中…');
+  for (const id of ['create-upload-task', 'file-input', 'submit-upload', 'upload-header-options', 'confirm-upload-header']) {
+    assert.equal(ui.get(id).disabled, true);
+  }
+  assert.equal(ui.get('submit-upload').textContent, '上传并预览');
+  await ui.createTask(); await ui.submit(); assert.equal(calls, 1);
+  resolve(response(201, taskResult())); await pending;
+  assert.equal(ui.get('file-input').disabled, false);
+  assert.equal(ui.get('create-upload-task').disabled, true);
+});
+
+test('definite task rejection preserves the file and confirmed preview for an explicit retry', async () => {
+  for (const status of [404, 422]) {
+    let calls = 0;
+    const ui = taskPage(async () => ++calls === 1
+      ? response(status, { detail: '文件不存在或参数不合法' }) : response(201, taskResult()));
+    await readyTask(ui); await ui.createTask();
+    assert.equal(ui.get('upload-error').textContent, '文件不存在或参数不合法');
+    assert.equal(ui.get('upload-task-result').hidden, true);
+    assert.equal(ui.get('upload-result').hidden, false);
+    assert.equal(ui.get('create-upload-task').disabled, false);
+    assert.equal(ui.get('create-upload-task').textContent, '创建任务');
+    assert.equal(ui.get('upload-preview-body').children.length, 1);
+    await settle(); assert.equal(calls, 1);
+    await ui.createTask(); assert.equal(calls, 2);
+  }
+});
+
+test('task identity checks reject another owner or expired login without sending a POST', async () => {
+  let userId = 1, calls = 0;
+  const ui = taskPage(async () => { calls++; return response(201, taskResult()); }, { currentUser: () => ({ id: userId }) });
+  await readyTask(ui); userId = 2; await ui.createTask();
+  assert.equal(calls, 0);
+  assert.equal(ui.get('upload-login').hidden, false);
+  userId = 1; ui.clearToken(); await ui.createTask();
+  assert.equal(calls, 0);
+  const rejected = taskPage(async () => response(401, {}));
+  await readyTask(rejected); await rejected.createTask();
+  assert.equal(rejected.get('upload-login').hidden, false);
+  assert.equal(rejected.get('upload-task-result').hidden, true);
+});
+
+test('lost or malformed task responses show uncertainty and never automatically retry', async () => {
+  const replies = [async () => { throw new TypeError('offline'); },
+    async () => response(500, { detail: 'Internal Server Error' }),
+    async () => ({ status: 201, ok: true, json: async () => { throw new SyntaxError('invalid json'); } }),
+    async () => response(200, taskResult()), async () => response(201, taskResult({ file_id: 'c'.repeat(32) })),
+    async () => response(201, taskResult({ task_id: '<img src=x onerror=alert(1)>' })),
+    async () => response(201, taskResult({ status: 'running' }))];
+  for (const reply of replies) {
+    let calls = 0;
+    const ui = taskPage(async (...args) => { calls++; return reply(...args); });
+    await readyTask(ui); await ui.createTask(); await settle();
+    assert.equal(calls, 1);
+    assert.equal(ui.get('upload-task-result').hidden, true);
+    assert(ui.get('upload-task-status').textContent.includes('结果未确认'));
+    assert(ui.get('upload-task-status').textContent.includes('重复任务'));
+    assert.equal(ui.get('create-upload-task').textContent, '重新创建任务');
+    assert.equal(ui.get('upload-result').hidden, false);
+  }
+});
+
+test('closing a task request retains uncertainty and ignores its late success after reopening', async () => {
+  let resolve, signal;
+  const ui = taskPage((_, options) => { signal = options.signal; return new Promise(done => { resolve = done; }); });
+  await readyTask(ui); const pending = ui.createTask(); await settle(); await ui.close();
+  assert.equal(signal.aborted, true);
+  await ui.get('new-task-button').click();
+  resolve(response(201, taskResult())); await pending;
+  assert.equal(ui.get('upload-task-result').hidden, true);
+  assert(ui.get('upload-task-status').textContent.includes('结果未确认'));
+  assert.equal(ui.get('create-upload-task').textContent, '重新创建任务');
+});
+
+test('task timeout preserves the confirmed file and requires a deliberate new submission', async () => {
+  let calls = 0;
+  const ui = taskPage((_, options) => { calls++; return new Promise((_, reject) =>
+    options.signal.addEventListener('abort', () => reject(new Error('aborted')))); });
+  await readyTask(ui); const pending = ui.createTask(); await settle(); ui.expire(); await pending;
+  assert.equal(calls, 1);
+  assert(ui.get('upload-error').textContent.includes('创建请求超时'));
+  assert(ui.get('upload-task-status').textContent.includes('结果未确认'));
+  assert.equal(ui.get('upload-result').hidden, false);
+  assert.equal(ui.get('create-upload-task').disabled, false);
+  assert.equal(ui.timers.size, 0);
+});
+
+test('a rejected manual retry cannot erase uncertainty about the first task request', async () => {
+  let calls = 0;
+  const ui = taskPage(async () => {
+    if (++calls === 1) throw new TypeError('lost response');
+    return response(422, { detail: '参数错误' });
+  });
+  await readyTask(ui); await ui.createTask(); await ui.createTask();
+  assert.equal(calls, 2);
+  assert(ui.get('upload-task-status').textContent.includes('结果未确认'));
+  assert.equal(ui.get('create-upload-task').textContent, '重新创建任务');
+});
+
+test('changing or reuploading the file clears the previous task and requires fresh header confirmation', async () => {
+  const ui = taskPage();
+  await readyTask(ui); await ui.createTask();
+  await ui.select(csv('new.csv'));
+  assert.equal(ui.get('upload-task-result').hidden, true);
+  assert.equal(ui.get('upload-task-result').textContent, '');
+  assert.equal(ui.get('create-upload-task').disabled, true);
+  await ui.submit(); await ui.chooseHeader(false); await ui.confirmHeader(); await ui.createTask();
+  assert.equal(ui.get('upload-task-result').hidden, false);
+  await ui.submit();
+  assert.equal(ui.get('upload-task-result').hidden, true);
+  assert.equal(ui.get('create-upload-task').disabled, true);
+  assert.equal(ui.get('upload-header-options').disabled, false);
+});
+
+test('a task success arriving after logout or in preview mode cannot be displayed or sent', async () => {
+  const ui = taskPage(async () => { ui.clearToken(); return response(201, taskResult()); });
+  await readyTask(ui); await ui.createTask();
+  assert.equal(ui.get('upload-task-result').hidden, true);
+  assert.equal(ui.get('upload-login').hidden, false);
+  assert(ui.get('upload-task-status').textContent.includes('结果未确认'));
+  let calls = 0;
+  const demo = taskPage(async () => { calls++; return response(201, taskResult()); }, { previewOnly: true });
+  await demo.select(csv()); await demo.submit(); await demo.createTask();
+  assert.equal(calls, 0);
+  assert.equal(demo.get('create-upload-task').disabled, true);
 });

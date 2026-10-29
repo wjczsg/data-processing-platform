@@ -1,4 +1,4 @@
-/* Authenticated CSV upload, persistence and preview. No task creation or automatic upload retry. */
+/* Authenticated CSV upload, header confirmation and task creation. Writes are never replayed automatically. */
 (function () {
   "use strict";
   const $ = id => document.getElementById(id);
@@ -8,8 +8,10 @@
   let selectedFile = null, busy = false, requestVersion = 0, activeController = null;
   let uploadedResult = null, confirmedHasHeader = null, confirmedColumns = null;
   let savingHeader = false, headerSaveUncertain = false;
+  let creatingTask = false, createdTask = null, taskCreateUncertain = false;
   const headerOptions = $("upload-header-options"), headerYes = $("upload-header-yes");
   const headerNo = $("upload-header-no"), confirmHeader = $("confirm-upload-header");
+  const createTaskButton = $("create-upload-task"), taskSection = $("upload-task");
 
   class UploadError extends Error {
     constructor(message, needsLogin = false) { super(message); this.needsLogin = needsLogin; }
@@ -38,8 +40,8 @@
     $("upload-login").hidden = !needsLogin;
   }
 
-  function revealOutcome() {
-    const target = $("upload-error").hidden ? headerOptions : $("upload-error");
+  function revealOutcome(section = headerOptions) {
+    const target = $("upload-error").hidden ? section : $("upload-error");
     const top = dialog.scrollTop + target.getBoundingClientRect().top - dialog.getBoundingClientRect().top - 16;
     dialog.scrollTo({ top: Math.max(0, top), behavior: "auto" });
   }
@@ -47,12 +49,13 @@
   function setBusy(value, operation = "upload") {
     busy = value;
     savingHeader = value && operation === "header";
+    creatingTask = value && operation === "task";
     form.setAttribute("aria-busy", String(value));
     input.disabled = value;
     $("dropzone").setAttribute("aria-disabled", String(value));
     $("submit-upload").disabled = value || !selectedFile || previewOnly;
-    $("submit-upload").textContent = value && !savingHeader ? "上传并检查中…" : "上传并预览";
-    headerOptions.disabled = value || !uploadedResult?.preview_rows.length;
+    $("submit-upload").textContent = value && operation === "upload" ? "上传并检查中…" : "上传并预览";
+    headerOptions.disabled = value || !uploadedResult?.preview_rows.length || Boolean(createdTask);
     updateHeaderChoice();
   }
 
@@ -61,6 +64,8 @@
     confirmedHasHeader = null;
     confirmedColumns = null;
     headerSaveUncertain = false;
+    createdTask = null;
+    taskCreateUncertain = false;
     headerYes.checked = false;
     headerNo.checked = false;
     headerOptions.disabled = true;
@@ -69,6 +74,7 @@
     $("upload-result").hidden = true;
     $("upload-preview-head").replaceChildren();
     $("upload-preview-body").replaceChildren();
+    updateTaskChoice();
   }
 
   function selectFiles(files) {
@@ -156,6 +162,23 @@
       : choice === null ? (headerYes.disabled ? "首条记录没有字段，可选择按无表头预览。" : "请选择是否包含表头。")
         : choice === confirmedHasHeader ? `表头设置已保存：${choice ? "第一条记录作为列名" : "全部记录作为数据"}。`
           : "已选择，请点击确认保存设置。";
+    updateTaskChoice();
+  }
+
+  function updateTaskChoice() {
+    const choice = headerYes.checked && !headerYes.disabled ? true : headerNo.checked ? false : null;
+    const ready = uploadedResult && confirmedHasHeader !== null && !headerSaveUncertain
+      && choice === confirmedHasHeader;
+    createTaskButton.disabled = busy || previewOnly || !ready || Boolean(createdTask);
+    createTaskButton.textContent = creatingTask ? "创建中…" : createdTask ? "任务已创建"
+      : taskCreateUncertain ? "重新创建任务" : "创建任务";
+    $("upload-task-status").textContent = creatingTask ? "正在创建任务…"
+      : createdTask ? "任务已创建，等待处理。"
+      : taskCreateUncertain ? "创建结果未确认，请先核对记录；再次创建可能产生重复任务。"
+      : ready ? "表头已保存，可以创建任务。" : "请先确认并保存当前的表头选择。";
+    $("upload-task-result").hidden = !createdTask;
+    $("upload-task-result").textContent = createdTask
+      ? `任务编号：${createdTask.task_id} · 状态：等待处理（${createdTask.status}）` : "";
   }
 
   headerYes.addEventListener("change", updateHeaderChoice);
@@ -219,6 +242,62 @@
     } finally {
       if (timeout !== null) window.clearTimeout(timeout);
       if (version === requestVersion) { activeController = null; setBusy(false); revealOutcome(); }
+    }
+  });
+
+  createTaskButton.addEventListener("click", async () => {
+    if (busy || previewOnly || createTaskButton.disabled || !uploadedResult) return;
+    const record = uploadedResult, previousUncertainty = taskCreateUncertain;
+    const version = ++requestVersion, controller = new AbortController();
+    activeController = controller;
+    let timeout = null, timedOut = false;
+    showError(); setBusy(true, "task"); setStatus("正在确认登录状态并创建任务…");
+    try {
+      const user = await session.currentUser();
+      if (version !== requestVersion) return;
+      if (user.id !== record.owner_id) throw new UploadError("当前账号与上传账号不一致，请重新登录。", true);
+      const token = session.getToken();
+      if (!token) throw new UploadError("请先登录后再创建任务。", true);
+      timeout = window.setTimeout(() => { timedOut = true; controller.abort(); }, 15000);
+      // POST is not idempotent yet: a lost response may still mean a committed task.
+      taskCreateUncertain = true;
+      const response = await fetch(`${session.apiBaseUrl}/api/tasks`, {
+        method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ file_id: record.file_id }), credentials: "omit", cache: "no-store", signal: controller.signal,
+      });
+      if (version !== requestVersion) return;
+      if (response.status >= 400 && response.status < 500) taskCreateUncertain = previousUncertainty;
+      if (response.status === 401) throw new UploadError("登录状态已失效，请重新登录后再创建任务。", true);
+      const data = await response.json().catch(() => null);
+      if (version !== requestVersion) return;
+      if (!response.ok) {
+        const detail = typeof data?.detail === "string" ? data.detail
+          : Array.isArray(data?.detail) ? data.detail.map(item => item.msg).filter(Boolean).join("；") : "";
+        throw new UploadError(response.status >= 500
+          ? "暂时无法确认任务创建结果，请先核对记录；重复创建可能生成新任务。"
+          : detail || "任务创建失败，请检查后重试。");
+      }
+      if (!session.getToken()) throw new UploadError("登录状态已变化，请重新登录后核对创建结果。", true);
+      if (response.status !== 201 || typeof data?.task_id !== "string" || !/^[0-9a-f]{32}$/.test(data.task_id)
+        || data.file_id !== record.file_id || data.status !== "pending") {
+        throw new UploadError("暂时无法确认任务创建结果，请先核对记录；重复创建可能生成新任务。");
+      }
+      createdTask = { task_id: data.task_id, file_id: data.file_id, status: data.status };
+      taskCreateUncertain = false;
+      setStatus("任务已创建，状态为等待处理。");
+    } catch (error) {
+      if (version !== requestVersion) return;
+      setStatus(taskCreateUncertain ? "文件及表头已保存，任务创建结果待确认。" : "文件及表头已保存，本次任务未创建。");
+      if (timedOut) showError("创建请求超时，结果未确认；请先核对记录，重复创建可能生成新任务。");
+      else if (error instanceof UploadError) showError(error.message, error.needsLogin);
+      else if (error instanceof session.SessionExpiredError || error instanceof session.SessionChangedError) {
+        showError("登录状态已变化，请重新登录后再创建任务。", true);
+      } else if (error instanceof session.ConnectionError && !taskCreateUncertain) {
+        showError("暂时无法确认登录状态，请稍后重试。");
+      } else showError("暂时无法确认任务创建结果；文件和预览已保留，重复创建可能生成新任务。");
+    } finally {
+      if (timeout !== null) window.clearTimeout(timeout);
+      if (version === requestVersion) { activeController = null; setBusy(false); revealOutcome(taskSection); }
     }
   });
 

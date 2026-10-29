@@ -74,7 +74,7 @@
     <div class="modal-body">
       <div class="field-label">CSV 文件</div>
       <label class="dropzone" id="dropzone" tabindex="0"><input type="file" id="file-input" name="file" accept=".csv,text/csv"><span class="upload-icon"><svg><use href="#i-upload"/></svg></span><strong id="drop-title">点击选择，或将文件拖到这里</strong><span id="drop-subtitle">每次一个 CSV · UTF-8 编码 · 默认上限 50 MiB</span></label>
-      <div class="notice"><svg><use href="#i-info"/></svg><p>检查通过后保存原文件和文件信息，暂不创建处理任务。刷新后预览不保留，文件列表查询尚未接入。</p></div>
+      <div class="notice"><svg><use href="#i-info"/></svg><p>上传后预览并确认表头，再单独创建任务。刷新后当前预览不保留；任务创建后暂不会执行文件处理。</p></div>
       <p id="upload-status" class="upload-status" role="status" aria-live="polite" hidden></p>
       <p id="upload-error" class="form-error" role="alert" hidden></p>
       <a id="upload-login" class="upload-login" href="auth.html" hidden>前往登录</a>
@@ -92,6 +92,12 @@
         <div id="upload-preview-scroll" class="upload-preview-scroll" tabindex="0" role="region" aria-label="CSV 前几条记录"><table class="upload-preview-table"><thead id="upload-preview-head"></thead><tbody id="upload-preview-body"></tbody></table></div>
         <p id="upload-empty-preview" class="small-note" hidden></p>
         <p id="upload-truncated" class="small-note" hidden>预览已截断：最多展示前 5 条记录、50 列，每个单元格 200 字符。后端仍检查整个文件的 CSV 语法。</p>
+        <section id="upload-task" class="upload-task" aria-labelledby="upload-task-title">
+          <h3 id="upload-task-title">创建处理任务</h3>
+          <p class="small-note">当前仅保存任务记录，文件处理功能尚未开放。</p>
+          <div class="upload-header-actions"><button type="button" id="create-upload-task" class="button primary" disabled>创建任务</button><span id="upload-task-status" role="status" aria-live="polite">请先确认并保存当前的表头选择。</span></div>
+          <p id="upload-task-result" class="small-note" role="status" aria-live="polite" hidden></p>
+        </section>
       </section>
     </div>
     <div class="modal-footer"><button type="button" class="button" data-close="upload-dialog">关闭</button><button type="submit" class="button primary" id="submit-upload" disabled>上传并预览</button></div>
@@ -99,7 +105,7 @@
 
   <dialog id="detail-dialog" class="detail-drawer" aria-labelledby="detail-title"><div class="drawer-head"><span>任务详情</span><button class="icon-button" data-close="detail-dialog" aria-label="关闭任务详情"><svg><use href="#i-close"/></svg></button></div><div id="detail-content"></div></dialog>
 
-  <dialog id="help-dialog" class="modal help-modal" aria-labelledby="help-title"><div class="modal-heading"><div><h2 id="help-title">使用说明</h2><p>上传检查可用，任务和文件列表仍为静态示例。</p></div><button class="icon-button" data-close="help-dialog" aria-label="关闭说明"><svg><use href="#i-close"/></svg></button></div><div class="modal-body help-content"><ol><li>登录后点击“上传文件”，选择或拖入一个 CSV。</li><li>点击“上传并预览”，由后端检查格式、编码及大小，并返回前 5 条记录。</li><li>上传成功后选择首条记录是否为表头，点击“确认选择”保存设置，成功后更新预览。</li><li>错误提示会保留所选文件，修正问题后可以手动重试。</li><li>任务列表、进度、规则和报告区域目前用于布局展示。</li></ol><p>上传检查通过不代表订单或其他业务数据正确；原文件和文件信息已保存，表头设置可确认保存，后台任务和报告待实现。</p></div><div class="modal-footer"><button class="button primary" data-close="help-dialog">知道了</button></div></dialog>
+  <dialog id="help-dialog" class="modal help-modal" aria-labelledby="help-title"><div class="modal-heading"><div><h2 id="help-title">使用说明</h2><p>上传检查和任务创建可用，任务和文件列表仍为静态示例。</p></div><button class="icon-button" data-close="help-dialog" aria-label="关闭说明"><svg><use href="#i-close"/></svg></button></div><div class="modal-body help-content"><ol><li>登录后点击“上传文件”，选择或拖入一个 CSV。</li><li>点击“上传并预览”，由后端检查格式、编码及大小，并返回前 5 条记录。</li><li>上传成功后选择首条记录是否为表头，点击“确认选择”保存设置，成功后更新预览。</li><li>点击“创建任务”，成功后显示任务编号和等待处理状态；本次仅保存任务记录。</li><li>创建结果未确认时，请先核对记录，重复创建可能产生新任务。</li><li>任务列表、进度、规则和报告区域目前用于布局展示。</li></ol><p>上传检查通过不代表业务数据正确；后台处理和报告尚未开放。刷新后当前预览和任务提示不保留，已经保存的记录仍在。</p></div><div class="modal-footer"><button class="button primary" data-close="help-dialog">知道了</button></div></dialog>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>
