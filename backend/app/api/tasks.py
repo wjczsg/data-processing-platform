@@ -7,7 +7,9 @@ from sqlalchemy.orm import Session
 
 from backend.app.api.dependencies import get_current_user, get_database_session
 from backend.app.api.schemas.tasks import CreateTaskRequest, CreateTaskResponse
-from backend.app.application.create_processing_task import create_processing_task
+from backend.app.application.create_processing_task import (
+    FileConfigurationNotReadyError, create_processing_task,
+)
 from backend.app.application.ports.file_repository import UploadedFileNotFoundError
 from backend.app.domain.user import User
 
@@ -18,11 +20,12 @@ router = APIRouter(prefix="/api/tasks", tags=["任务"])
     "", response_model=CreateTaskResponse, status_code=201, summary="创建处理任务记录",
     description=(
         "为当前用户自己的上传文件创建一条 pending 任务并提交到数据库。"
-        "当前仅保存记录，不要求先确认表头，不启动后台处理。"
+        "要求文件已确认表头且列配置可用，将当前配置复制为任务输入快照，不启动后台处理。"
         "每次调用创建独立任务，重复提交去重尚未实现。"
     ),
     responses={401: {"description": "未登录或登录已失效"},
-               404: {"description": "文件不存在或不属于当前用户"}},
+               404: {"description": "文件不存在或不属于当前用户"},
+               409: {"description": "尚未确认表头或文件列配置不可用"}},
 )
 def create_task(
     payload: CreateTaskRequest,
@@ -36,4 +39,6 @@ def create_task(
         result = create_processing_task(session, file_id=payload.file_id, owner_id=user.id)
     except UploadedFileNotFoundError as error:
         raise HTTPException(status_code=404, detail="文件不存在") from error
+    except FileConfigurationNotReadyError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
     return CreateTaskResponse(**result)

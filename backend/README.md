@@ -290,7 +290,7 @@ MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前�
 | `file_id` | 外键关联 `uploaded_files.id`，带查询索引；同一文件允许多个任务 |
 | `owner_id` | 外键关联 `users.id`，带查询索引；创建服务检查文件归属一致 |
 | `status` | ORM 和数据库均默认 `pending`，数据库约束只允许 pending、running、succeeded、failed |
-| `input_config` | JSON 输入配置快照，允许 SQL NULL；当前仅预留字段，下一步创建任务时填充 |
+| `input_config` | JSON 输入配置快照；新任务写入 version、has_header、columns，历史无快照记录保留 SQL NULL |
 | `processed_rows` | BIGINT UNSIGNED 处理记录数，ORM 和数据库均默认 0 |
 | `error_message` | TEXT 失败原因，默认 SQL NULL |
 | `started_at` | 开始时间，UTC 的 DATETIME(6)，默认 SQL NULL，由后续领取逻辑填写 |
@@ -300,7 +300,7 @@ MySQL DDL 不能按普通数据事务期待自动回滚；执行结构降级前�
 
 时间默认值和自动更新时间由 SQLAlchemy 执行；直接执行 SQL 时应显式提供时间，并在更新时维护 `updated_at`。状态约束限制取值，不负责状态流转规则。外键阻止删除仍被任务引用的文件或用户。
 
-0006 为后续按 pending 状态、创建时间及任务编号领取任务增加非唯一索引 `ix_processing_tasks_status_created_at_id`，不替代并发领取的事务与行锁。原有任务保留原始状态和时间，新增配置、失败原因、执行时间均为 SQL NULL，处理记录数为 0；不会自动复制文件当前表头作为历史快照。当前创建接口继续使用这些默认值，没有开始执行任务。
+0006 为后续按 pending 状态、创建时间及任务编号领取任务增加非唯一索引 `ix_processing_tasks_status_created_at_id`，不替代并发领取的事务与行锁。迁移时原有任务保留原始状态和时间，新增配置、失败原因、执行时间均为 SQL NULL，处理记录数为 0；不会自动复制文件当前表头作为历史快照。创建接口现已为新任务保存输入快照，其余执行字段继续使用默认值，没有开始执行任务。
 
 真实 MySQL 验证（先应用迁移；测试写入全部回滚，不留下任务、文件或账号记录）：
 
@@ -323,12 +323,12 @@ try {
 
 1. `api/schemas/tasks.py` 定义请求和响应，检查文件编号并拒绝额外字段。
 2. `api/tasks.py` 通过 `get_current_user` 获取登录身份，通过 `get_database_session` 取得与认证复用的 Session。
-3. `application/create_processing_task.py` 用文件编号和当前用户编号联合查询，生成 UUID 任务编号，组装 `ProcessingTaskModel`，add 后 commit；返回值在提交前整理，避免提交后访问过期 ORM 对象又发起查询。
+3. `application/create_processing_task.py` 用文件编号和当前用户编号联合查询完整文件记录，先检查归属，再检查 `has_header is not None` 和列结构可用（非空列表、列索引从 0 连续、列名非空且不重复），深拷贝形成 `{version: 1, has_header, columns}` 快照。生成 UUID 任务编号，组装含 `input_config` 的 `ProcessingTaskModel`，add 后 commit；返回值在提交前整理，避免提交后访问过期 ORM 对象又发起查询。
 4. `main.py` 注册任务路由。
 
-业务方法不自行关闭 Session；异常继续交给已有 `session_scope` 回滚和关闭。文件不存在与归属不符均返回 `404`；认证失败 `401`，参数不符 `422`，未预期失败使用通用 `500` 响应。数据库提交成功才返回任务信息。
+业务方法不自行关闭 Session；异常继续交给已有 `session_scope` 回滚和关闭。文件不存在与归属不符均返回 `404`；尚未确认表头或列配置不可用返回 `409`，通过 `FileConfigurationNotReadyError` 转换为可操作提示；认证失败 `401`，参数不符 `422`，未预期失败使用通用 `500` 响应。数据库提交成功才返回任务信息。
 
-当前后端创建任务不要求表头已确认，不读取原文件或执行校验；每次调用创建独立记录，尚未实现请求去重、任务查询或后台执行。前端已接入创建按钮，要求上传并确认表头后单独提交，成功显示任务编号与 pending 状态；上传和确认表头本身不会自动创建任务。
+当前前后端均要求先确认表头：`has_header=False` 表示已确认无表头，可以创建；只有 NULL 表示尚未确认。新任务将当时配置保存在独立快照中，之后更新文件设置不会修改旧任务；同一文件再次创建任务时使用新配置。创建过程不读取原文件或执行数据校验；每次调用创建独立记录，尚未实现请求去重、任务查询或后台执行。前端已接入创建按钮，要求上传并确认表头后单独提交，成功显示任务编号与 pending 状态；上传和确认表头本身不会自动创建任务。历史无快照任务保持原样，后续 Worker 需明确处理，不能推断创建时配置。
 
 普通接口测试：`.\.venv\Scripts\python.exe -m unittest backend.tests.test_task_creation -v`。
 
@@ -337,10 +337,10 @@ try {
 ```powershell
 $env:RUN_MYSQL_TESTS = "1"
 try {
-    .\.venv\Scripts\python.exe -m unittest backend.tests.test_create_processing_task_mysql backend.tests.test_file_upload_mysql.MySQLFileUploadTests.test_uploaded_file_can_create_a_committed_pending_task -v
+    .\.venv\Scripts\python.exe -m unittest backend.tests.test_create_processing_task_mysql backend.tests.test_file_upload_mysql.MySQLFileUploadTests.test_uploaded_file_can_create_a_committed_pending_task backend.tests.test_file_upload_mysql.MySQLFileUploadTests.test_confirmed_no_header_file_can_create_a_task -v
 } finally {
     Remove-Item Env:RUN_MYSQL_TESTS
 }
 ```
 
-验证真实提交、其他用户文件拒绝、文件不存在、同一文件多个独立任务、提交失败回滚，以及真实登录上传后调用任务接口的完整流程。
+验证真实提交、其他用户文件拒绝、文件不存在、同一文件多个独立任务、提交失败回滚，以及未确认/非法配置不落任务、有表头/无表头均可创建、文件设置变化后旧快照不变且新任务使用新设置。端到端覆盖真实登录、上传、确认表头后调用任务接口的完整流程。

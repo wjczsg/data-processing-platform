@@ -38,7 +38,7 @@ class ProcessingTaskModel(Base):
         String(16, collation="utf8mb4_bin"), default="pending",
         server_default=text("'pending'"), nullable=False,
     )
-    # None 表示尚未保存输入配置；下一步创建任务时写入表头和完整列结构快照。
+    # 新任务创建时保存表头和完整列结构快照；历史无快照任务保留 SQL NULL。
     input_config: Mapped[dict[str, object] | None] = mapped_column(JSON(none_as_null=True), nullable=True)
     processed_rows: Mapped[int] = mapped_column(
         BIGINT(unsigned=True), default=0, server_default=text("0"), nullable=False,

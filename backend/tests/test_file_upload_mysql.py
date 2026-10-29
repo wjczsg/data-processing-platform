@@ -79,6 +79,16 @@ class MySQLFileUploadTests(unittest.IsolatedAsyncioTestCase):
     async def test_uploaded_file_can_create_a_committed_pending_task(self):
         status, upload = await self.upload()
         self.assertEqual(status, 201)
+        # 绕过前端直接提交未确认的文件，也必须被后端拒绝且不落任务记录。
+        status, error = await request_json(self.app, "/api/tasks", "POST", {"file_id": upload["file_id"]},
+                                         headers={"Authorization": f"Bearer {self.token}"})
+        self.assertEqual((status, error), (409, {"detail": "请先确认文件表头"}))
+        with self.engine.connect() as connection:
+            self.assertEqual(connection.execute(select(ProcessingTaskModel.id).where(
+                ProcessingTaskModel.file_id == upload["file_id"],
+            )).all(), [])
+        status, configuration = await self.confirm_header(upload["file_id"], True)
+        self.assertEqual(status, 200)
         status, task = await request_json(self.app, "/api/tasks", "POST", {"file_id": upload["file_id"]},
                                         headers={"Authorization": f"Bearer {self.token}"})
         self.assertEqual(status, 201)
@@ -93,8 +103,32 @@ class MySQLFileUploadTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row["status"], "pending")
         self.assertIsNotNone(row["created_at"])
         self.assertIsNotNone(row["updated_at"])
-        # 该接口只创建记录，不要求表头已确认，也不修改文件配置。
-        self.assertIsNone(self.stored_rows()[0]["has_header"])
+        expected = {"version": 1, "has_header": True, "columns": configuration["columns"]}
+        self.assertEqual(row["input_config"], expected)
+        self.assertTrue(self.stored_rows()[0]["has_header"])
+        # 通过真实表头接口修改文件，已经提交的任务配置仍保持创建时的含义。
+        self.assertEqual((await self.confirm_header(upload["file_id"], False))[0], 200)
+        with self.engine.connect() as connection:
+            saved = connection.execute(select(ProcessingTaskModel.__table__).where(
+                ProcessingTaskModel.id == task["task_id"],
+            )).mappings().one()
+        self.assertEqual(saved["input_config"], expected)
+
+    async def test_confirmed_no_header_file_can_create_a_task(self):
+        status, upload = await self.upload(b"001,Alice\r\n002,Bob\r\n")
+        self.assertEqual(status, 201)
+        status, configuration = await self.confirm_header(upload["file_id"], False)
+        self.assertEqual(status, 200)
+        status, task = await request_json(self.app, "/api/tasks", "POST", {"file_id": upload["file_id"]},
+                                        headers={"Authorization": f"Bearer {self.token}"})
+        self.assertEqual(status, 201)
+        with self.engine.connect() as connection:
+            saved = connection.execute(select(ProcessingTaskModel.__table__).where(
+                ProcessingTaskModel.id == task["task_id"],
+            )).mappings().one()
+        self.assertEqual(saved["input_config"], {
+            "version": 1, "has_header": False, "columns": configuration["columns"],
+        })
 
     async def test_header_confirmation_commits_full_columns_and_repeated_calls_update_one_record(self):
         names = [" 长列名" + "名" * 250 + " ", *[f"列{index}" for index in range(1, 55)]]

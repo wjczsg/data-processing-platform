@@ -12,6 +12,7 @@ from backend.app.api.exception_handlers import (
     request_validation_exception_handler, unhandled_exception_handler,
 )
 from backend.app.api.tasks import router
+from backend.app.application.create_processing_task import FileConfigurationNotReadyError
 from backend.app.application.ports.file_repository import UploadedFileNotFoundError
 from backend.app.application.ports.token_service import InvalidAccessTokenError
 from backend.app.domain.user import User
@@ -58,6 +59,7 @@ class TaskCreationTests(unittest.IsolatedAsyncioTestCase):
                     {"file_id": "A" * 32}, {"file_id": "a" * 33}]
         payloads.extend({"file_id": self.file_id, key: value} for key, value in (
             ("owner_id", 999), ("status", "succeeded"), ("task_id", "c" * 32),
+            ("input_config", {"has_header": True, "columns": []}),
         ))
         for payload in payloads:
             with self.subTest(payload=payload):
@@ -67,6 +69,12 @@ class TaskCreationTests(unittest.IsolatedAsyncioTestCase):
     async def test_unavailable_file_returns_not_found(self):
         self.create.side_effect = UploadedFileNotFoundError("内部文件归属信息")
         self.assertEqual(await self.create_task(), (404, {"detail": "文件不存在"}))
+
+    async def test_unready_configuration_returns_conflict_with_actionable_message(self):
+        for message in ("请先确认文件表头", "文件列配置不可用，请重新确认表头"):
+            with self.subTest(message=message):
+                self.create.side_effect = FileConfigurationNotReadyError(message)
+                self.assertEqual(await self.create_task(), (409, {"detail": message}))
 
     async def test_database_failure_is_not_reported_as_success_or_exposed(self):
         self.create.side_effect = RuntimeError("private database failure details")
